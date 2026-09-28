@@ -1,0 +1,92 @@
+# Bin Day — a garbage truck simulator
+
+Drive a side-loader garbage truck around a procedurally generated suburb and
+empty as many wheelie bins as you can before the end of your shift.
+
+The arm is on the truck's left flank, out of sight of the driver's seat. The
+only way to see it is the **fork cam** screen next to the steering wheel:
+creep along the kerb until the screen says **LINED UP**, then press
+**Space** to grab, lift and tip the bin.
+
+![Driver's view with the fork cam screen](docs/cab.png)
+
+Written in Go on the [Godot Engine](https://godotengine.org/), using the
+[graphics.gd](https://github.com/quaadgras/graphics.gd) bindings. Everything
+(suburb, houses, trees, truck, sounds) is generated in code; there are no
+art or audio assets.
+
+## Running (macOS)
+
+You need Go 1.27+ and Xcode command line tools (for cgo). The `gd` command
+downloads the matching Godot build on first use.
+
+```sh
+go install graphics.gd/cmd/gd@latest
+gd run
+```
+
+To export a standalone `.app`, use `GOOS=macos gd build`.
+
+Options go after `--` when launching Godot directly, for example
+`~/gd/bin/Godot.app/Contents/MacOS/Godot --path graphics -- --time=300 --seed=7`:
+
+| Option | Meaning |
+| --- | --- |
+| `--time=SECONDS` | shift length (also selectable on the title screen) |
+| `--seed=N` | which suburb to generate |
+| `--play` | skip the title screen |
+
+## How to play
+
+| Key | Action |
+| --- | --- |
+| W / ↑ | accelerate |
+| S / ↓ | brake, then reverse (listen for the beeper) |
+| A D / ← → | steer |
+| Space (or E) | grab the bin |
+| F or Tab (hold) | lean in to look at the fork cam screen |
+| H | horn |
+| Esc / P | pause (Q from the pause screen ends the shift) |
+
+On the title screen, ←/→ change the shift length, N builds a new suburb,
+Enter starts and Esc quits.
+
+- Traffic keeps left, so bins are on your **left**. Drive in the left lane
+  and the bins will be within the arm's reach.
+- The fork cam shows the pickup zone on the kerb and tells you how far to go:
+  `FORWARD 1.6 m >>`, `LINED UP!`, `PERFECT!`. "Ahead" is to the right of
+  the screen, as if you were looking out of the left window.
+- You don't need to stop dead: below about 10 km/h the truck pulls up by
+  itself when you press Space.
+- **Scoring:** 100 points per bin, +50 for a PERFECT line-up, double points
+  for the current **bonus colour** (it changes every 40 seconds), and a
+  combo multiplier of up to x3 if you keep emptying bins within 20 seconds
+  of each other.
+- Bins come in three colours: red (rubbish), yellow (recycling) and green
+  (garden). Floating markers show uncollected bins, and the minimap shows
+  those nearby.
+
+Best scores are saved per shift length.
+
+## Code layout
+
+| Path | What |
+| --- | --- |
+| `internal/sim` | engine-independent game logic: suburb generator, truck physics, arm, scoring |
+| `internal/meshgen` | low-poly, vertex-coloured geometry for the town, truck and bins |
+| `*.go` (root) | the Godot presentation layer: scene setup, cameras, HUD, fork cam overlay, audio synthesis |
+| `cmd/townmap` | renders a suburb layout to PNG (`go run ./cmd/townmap -seed 42 -o town.png`) |
+| `cmd/sheet` | tiles captured frames into a contact sheet |
+| `scripts/capture.sh` | builds and records frames with Godot's movie writer |
+
+The logic packages have ordinary Go tests: `go test ./internal/...`.
+
+For headless-ish checks, `scripts/capture.sh FRAMES [game options]` records
+PNG frames to `/tmp/gts-capture`. It accepts these extra development options:
+
+- `--scenario=pickup`: the truck starts short of a bin, then creeps up and grabs it.
+- `--scenario=drive`: holds the throttle.
+- `--synth-keys`: replays a key sequence through Godot's input system (menu, driving, pickup, pause, new suburb).
+- `--view=chase|top|fork`: shows the scene from outside the cab, or shows the fork cam full screen.
+
+![A generated suburb](docs/town-map.png)
