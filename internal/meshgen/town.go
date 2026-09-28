@@ -8,21 +8,24 @@ import (
 
 // Palette.
 var (
-	Asphalt  = Hex(0x3d3f44)
-	Footpath = Hex(0xb9b5ab)
-	Kerb     = Hex(0xd2cec4)
-	Concrete = Hex(0xaaa69c)
-	Paint    = Hex(0xeeeee4)
-	Glass    = Hex(0x2c3c50)
+	Asphalt  = Hex(0x46484d)
+	Footpath = Hex(0xbdb9ae)
+	Kerb     = Hex(0xcfcbc0)
+	Concrete = Hex(0xb0aca1)
+	Paint    = Hex(0xf2f2ea)
+	Glass    = Hex(0x3a4c60)
 	Trim     = Hex(0xf2f0ea)
+	Timber   = Hex(0x6e5a44)
 
 	walls = []RGBA{Hex(0xede3c8), Hex(0xf2dfa0), Hex(0xb9d3e0), Hex(0xb8c9a3),
 		Hex(0xe8b49a), Hex(0xf4f2ec), Hex(0xa65a42), Hex(0xc89b6d)}
-	roofs = []RGBA{Hex(0xb5553a), Hex(0x4a4e54), Hex(0x5b6d82), Hex(0x6b4a3a), Hex(0x5e7a5a)}
-	doors = []RGBA{Hex(0x8a2b2b), Hex(0x2b4a8a), Hex(0x2f6b3f), Hex(0xe0b030), Hex(0x3a3a3a)}
-	leaf  = []RGBA{Hex(0x4e8a3a), Hex(0x3f7a34), Hex(0x6c9a45), Hex(0x5d8f3c)}
-	gum   = []RGBA{Hex(0x7e9a6a), Hex(0x8aa377), Hex(0x6d8c5e)}
-	pine  = []RGBA{Hex(0x2f5e34), Hex(0x3a6b3c)}
+	roofs  = []RGBA{Hex(0xb5553a), Hex(0x4a4e54), Hex(0x5b6d82), Hex(0x7a4a36), Hex(0x5e7a5a)}
+	doors  = []RGBA{Hex(0x8a2b2b), Hex(0x2b4a8a), Hex(0x2f6b3f), Hex(0xe0b030), Hex(0x3a3a3a)}
+	fences = []RGBA{Hex(0x55604f), Hex(0x6c6a5f), Hex(0xb9b2a0), Hex(0x3e4a52)}
+	leaf   = []RGBA{Hex(0x4e8a3a), Hex(0x3f7a34), Hex(0x6c9a45), Hex(0x5d8f3c)}
+	gum    = []RGBA{Hex(0x7e9a6a), Hex(0x8aa377), Hex(0x6d8c5e)}
+	pine   = []RGBA{Hex(0x2f5e34), Hex(0x3a6b3c)}
+	bloom  = []RGBA{Hex(0xe84a6a), Hex(0xf4d23c), Hex(0xf2f2f2), Hex(0x9a6ad8), Hex(0xf08a2c)}
 )
 
 // Chunks buckets geometry by map area so the renderer can cull it.
@@ -43,10 +46,13 @@ func (c Chunks) at(p sim.V2) *Mesh {
 // At maps a ground-plane point to 3D at height y.
 func At(p sim.V2, y float64) V3 { return v3(p.X, y, p.Y) }
 
+func ground(v V3) sim.V2 { return sim.V2{X: float64(v.X), Y: float64(v.Z)} }
+
 // TownMeshes holds the static scenery.
 type TownMeshes struct {
 	Ground  Chunks // receives shadows only
 	Scenery Chunks // houses, trees, roads
+	Far     *Mesh  // hills on the horizon
 }
 
 // Heights of the flat layers, far enough apart to avoid z-fighting.
@@ -54,14 +60,26 @@ const (
 	yFootpath = 0.018
 	yDrive    = 0.03
 	yRoad     = 0.04
+	yGutter   = 0.046
 	yLine     = 0.052
-	kerbH     = 0.14
+	kerbH     = 0.15
 )
+
+// rng is a tiny deterministic generator for decorative variation.
+type rng uint64
+
+func (r *rng) next() float64 {
+	*r = *r*6364136223846793005 + 1442695040888963407
+	return float64(*r>>11) / float64(1<<53)
+}
+
+func (r *rng) pick(p []RGBA) RGBA { return p[int(r.next()*float64(len(p)))%len(p)] }
 
 // BuildTown generates all static geometry for a suburb.
 func BuildTown(t *sim.Town) TownMeshes {
-	tm := TownMeshes{Ground: Chunks{}, Scenery: Chunks{}}
+	tm := TownMeshes{Ground: Chunks{}, Scenery: Chunks{}, Far: &Mesh{}}
 	buildGround(t, tm.Ground)
+	buildHills(t, tm.Far)
 	for ri := range t.Roads {
 		buildRoad(t, ri, tm.Scenery)
 	}
@@ -69,15 +87,19 @@ func BuildTown(t *sim.Town) TownMeshes {
 		if n.Bulb {
 			buildBulb(t, n, tm.Scenery)
 		} else if len(n.Roads) > 1 {
-			tm.Scenery.at(n.P).Disc(At(n.P, yRoad), sim.RoadHalfWidth*1.35, 20, Asphalt)
+			m := tm.Scenery.at(n.P)
+			m.Mat = MatAsphalt
+			m.Disc(At(n.P, yRoad), sim.RoadHalfWidth*1.35, 24, Asphalt)
+			m.Mat = MatPlain
 		}
 	}
 	for i := range t.Houses {
-		buildHouse(&t.Houses[i], tm.Scenery.at(t.Houses[i].P))
+		buildHouse(t, &t.Houses[i], tm.Scenery.at(t.Houses[i].P))
 	}
 	for i, tr := range t.Trees {
 		buildTree(tr, uint64(i)*2654435761+uint64(t.Seed), tm.Scenery.at(tr.P))
 	}
+	buildPoles(t, tm.Scenery)
 	return tm
 }
 
@@ -101,7 +123,7 @@ func noise(x, y float64) float64 {
 
 func grassAt(x, z float64) RGBA {
 	n := 0.6*noise(x/37, z/37) + 0.4*noise(x/9, z/9)
-	return Hex(0x5f9a44).Mix(Hex(0x86ad4f), float32(n)).Shade(float32(0.92 + 0.12*noise(x/3.1, z/3.1)))
+	return Hex(0x4f8639).Mix(Hex(0x7d9f48), float32(n)).Shade(float32(0.94 + 0.1*noise(x/3.1, z/3.1)))
 }
 
 func buildGround(t *sim.Town, out Chunks) {
@@ -111,6 +133,7 @@ func buildGround(t *sim.Town, out Chunks) {
 	for x := lo.X; x < hi.X; x += cell {
 		for z := lo.Y; z < hi.Y; z += cell {
 			m := out.at(sim.V2{X: x + cell/2, Y: z + cell/2})
+			m.Mat = MatGrass
 			corners := [4]V3{v3(x, 0, z), v3(x+cell, 0, z), v3(x+cell, 0, z+cell), v3(x, 0, z+cell)}
 			cols := [4]RGBA{}
 			for i, c := range corners {
@@ -119,13 +142,43 @@ func buildGround(t *sim.Town, out Chunks) {
 			// Two triangles, clockwise from above.
 			for _, tri := range [2][3]int{{0, 1, 2}, {0, 2, 3}} {
 				for _, i := range tri {
-					m.P = append(m.P, corners[i])
-					m.N = append(m.N, up)
-					m.C = append(m.C, cols[i])
+					m.vert(corners[i], up, cols[i])
 				}
 			}
 		}
 	}
+}
+
+// buildHills rings the suburb with rolling, wooded hills.
+func buildHills(t *sim.Town, m *Mesh) {
+	c := t.Min.Lerp(t.Max, 0.5)
+	r0 := t.Min.Dist(t.Max)/2 + 200
+	const angles, rings = 96, 8
+	pt := func(i, j int) (V3, RGBA) {
+		a := 2 * math.Pi * float64(i%angles) / angles
+		f := float64(j) / (rings - 1)
+		r := r0 + f*520
+		dir := sim.Dir(a)
+		p := c.Add(dir.Scale(r))
+		n := noise(dir.X*3+7, dir.Y*3+2)*0.6 + noise(dir.X*9, dir.Y*9)*0.4
+		hgt := math.Pow(f, 0.8) * (35 + 110*n)
+		if j == 0 {
+			hgt = -1 // tuck the inner edge under the ground plane
+		}
+		col := Hex(0x4f7d3a).Mix(Hex(0x2f5230), float32(f*0.8+0.2*n))
+		return At(p, hgt), col
+	}
+	m.Mat = MatGrass
+	for i := range angles {
+		for j := range rings - 1 {
+			a, ca := pt(i, j)
+			b, _ := pt(i+1, j)
+			cc, _ := pt(i+1, j+1)
+			d, _ := pt(i, j+1)
+			m.Quad(a, b, cc, d, V3{0, 1, 0}, ca)
+		}
+	}
+	m.Mat = MatPlain
 }
 
 // edgeAt offsets road point i sideways by d (positive to the left).
@@ -139,12 +192,20 @@ func buildRoad(t *sim.Town, ri int, out Chunks) {
 	r := &t.Roads[ri]
 	m := out.at(r.Pts[len(r.Pts)/2])
 	hw := sim.RoadHalfWidth
-	var left, right []V3
-	for i := range r.Pts {
-		left = append(left, edgeAt(r, i, hw, yRoad))
-		right = append(right, edgeAt(r, i, -hw, yRoad))
+	m.Mat = MatAsphalt
+	// Lanes are strips across the road: dusty edges, darker wheel paths.
+	bands := []struct {
+		off   float64
+		shade float32
+	}{{-hw, 1.12}, {-3.1, 0.93}, {-2.7, 0.88}, {-1.4, 0.93}, {-0.9, 1.0}, {0.9, 1.0}, {1.4, 0.93}, {2.7, 0.88}, {3.1, 0.93}, {hw, 1.12}}
+	for b := 0; b+1 < len(bands); b++ {
+		var left, right []V3
+		for i := range r.Pts {
+			left = append(left, edgeAt(r, i, bands[b+1].off, yRoad))
+			right = append(right, edgeAt(r, i, bands[b].off, yRoad))
+		}
+		m.Strip(left, right, Asphalt.Shade((bands[b].shade+bands[b+1].shade)/2))
 	}
-	m.Strip(left, right, Asphalt)
 
 	var bulb *sim.Node
 	if b := &t.Nodes[r.B]; b.Bulb {
@@ -158,30 +219,50 @@ func buildRoad(t *sim.Town, ri int, out Chunks) {
 		}
 		return t.OtherRoadDist(p, ri) > hw+margin
 	}
+	m.Mat = MatConcrete
 	for _, side := range []float64{1, -1} {
 		for i := 0; i+1 < len(r.Pts); i++ {
 			p0 := edgeAt(r, i, side*hw, 0)
 			p1 := edgeAt(r, i+1, side*hw, 0)
-			if !clear(sim.V2{X: float64(p0.X), Y: float64(p0.Z)}, 0.4) || !clear(sim.V2{X: float64(p1.X), Y: float64(p1.Z)}, 0.4) {
+			if !clear(ground(p0), 0.4) || !clear(ground(p1), 0.4) {
 				continue
 			}
-			// Kerb: a low raised lip at the road edge.
-			k0, k1 := edgeAt(r, i, side*(hw+0.25), 0), edgeAt(r, i+1, side*(hw+0.25), 0)
-			h := V3{0, kerbH, 0}
-			m.Quad(p0.Add(h), k0.Add(h), k1.Add(h), p1.Add(h), V3{0, 1, 0}, Kerb)
-			inward := p0.Sub(k0)
-			m.Quad(p0.Add(V3{0, yRoad, 0}), p1.Add(V3{0, yRoad, 0}), p1.Add(h), p0.Add(h), inward, Kerb.Shade(0.85))
+			kerbAndGutter(m, p0, p1, edgeAt(r, i, side*(hw-0.4), 0), edgeAt(r, i+1, side*(hw-0.4), 0),
+				edgeAt(r, i, side*(hw+0.3), 0), edgeAt(r, i+1, side*(hw+0.3), 0))
 		}
 		for i := 0; i+1 < len(r.Pts); i++ {
 			a0, a1 := edgeAt(r, i, side*sim.FootpathInner, yFootpath), edgeAt(r, i+1, side*sim.FootpathInner, yFootpath)
 			b0, b1 := edgeAt(r, i, side*sim.FootpathOuter, yFootpath), edgeAt(r, i+1, side*sim.FootpathOuter, yFootpath)
-			if !clear(sim.V2{X: float64(b0.X), Y: float64(b0.Z)}, 3.8) || !clear(sim.V2{X: float64(b1.X), Y: float64(b1.Z)}, 3.8) {
+			if !clear(ground(b0), 3.8) || !clear(ground(b1), 3.8) {
 				continue
 			}
 			m.Quad(a0, b0, b1, a1, V3{0, 1, 0}, Footpath)
+			// Expansion joint every other segment.
+			if i%2 == 0 {
+				j0, j1 := a0.Add(V3{0, 0.002, 0}), b0.Add(V3{0, 0.002, 0})
+				d := a1.Sub(a0).Norm().Scale(0.03)
+				m.Quad(j0, j1, j1.Add(d), j0.Add(d), V3{0, 1, 0}, Footpath.Shade(0.75))
+			}
+		}
+		// Stormwater drain grates in the gutter.
+		for s := 20.0; s < r.Len()-10; s += 47 {
+			p, tg := r.At(s + side*6)
+			n := tg.Left().Scale(side)
+			g := p.Add(n.Scale(hw - 0.2))
+			if !clear(g, 1) {
+				continue
+			}
+			fr := YawFrame(At(g, yGutter+0.003), tg.X, tg.Y)
+			m.Mat = MatMetal
+			m.Box(fr, -0.14, 0, -0.32, 0.14, 0.004, 0.32, Hex(0x4a4a4c), FaceBottom)
+			for k := -2; k <= 2; k++ {
+				m.Box(fr, -0.1, 0.004, float64(k)*0.12-0.025, 0.1, 0.006, float64(k)*0.12+0.025, Hex(0x151515))
+			}
+			m.Mat = MatConcrete
 		}
 	}
 	// Dashed centre line: 3m dashes, 6m gaps.
+	m.Mat = MatRoadPaint
 	for s := 4.5; s+3 < r.Len(); s += 9 {
 		p0, tg0 := r.At(s)
 		p1, tg1 := r.At(s + 3)
@@ -192,32 +273,54 @@ func buildRoad(t *sim.Town, ri int, out Chunks) {
 		m.Quad(At(p0.Add(tg0.Left().Scale(w)), yLine), At(p0.Add(tg0.Right().Scale(w)), yLine),
 			At(p1.Add(tg1.Right().Scale(w)), yLine), At(p1.Add(tg1.Left().Scale(w)), yLine), V3{0, 1, 0}, Paint)
 	}
+	m.Mat = MatPlain
 }
+
+// kerbAndGutter builds an Australian kerb profile between road-edge points
+// p0-p1: a concrete gutter strip on the road side (g0-g1) and a raised,
+// rounded kerb out to k0-k1.
+func kerbAndGutter(m *Mesh, p0, p1, g0, g1, k0, k1 V3) {
+	up := V3{0, 1, 0}
+	y := func(v V3, h float64) V3 { return V3{v.X, float32(h), v.Z} }
+	m.Quad(y(g0, yGutter), y(p0, yGutter), y(p1, yGutter), y(g1, yGutter), up, Kerb.Shade(0.88))
+	inward := g0.Sub(p0)
+	// Face, rounded nose, top.
+	n0 := p0.Lerp(k0, 0.25)
+	n1 := p1.Lerp(k1, 0.25)
+	m.Quad(y(p0, yGutter), y(p1, yGutter), y(p1, kerbH-0.04), y(p0, kerbH-0.04), inward, Kerb.Shade(0.92))
+	m.Quad(y(p0, kerbH-0.04), y(p1, kerbH-0.04), y(n1, kerbH), y(n0, kerbH), inward.Add(V3{0, 1, 0}), Kerb)
+	m.Quad(y(n0, kerbH), y(n1, kerbH), y(k1, kerbH), y(k0, kerbH), up, Kerb)
+	m.Quad(y(k0, kerbH), y(k1, kerbH), y(k1, 0), y(k0, 0), k0.Sub(p0), Kerb.Shade(0.8))
+}
+
+// Lerp interpolates between two points.
+func (a V3) Lerp(b V3, t float64) V3 { return a.Add(b.Sub(a).Scale(float32(t))) }
 
 func buildBulb(t *sim.Town, n sim.Node, out Chunks) {
 	m := out.at(n.P)
 	ri := n.Roads[0]
-	m.Disc(At(n.P, yRoad), sim.BulbRadius, 28, Asphalt)
+	m.Mat = MatAsphalt
+	m.Disc(At(n.P, yRoad), sim.BulbRadius, 36, Asphalt)
+	m.Mat = MatConcrete
 	// Kerb and footpath ring, broken where the street comes in.
-	const segs = 36
+	const segs = 44
+	R := sim.BulbRadius
 	for i := range segs {
 		a0 := 2 * math.Pi * float64(i) / segs
 		a1 := 2 * math.Pi * float64(i+1) / segs
 		ring := func(a, r float64) sim.V2 { return n.P.Add(sim.Dir(a).Scale(r)) }
-		if roadCorridor(t, ri, ring(a0, sim.BulbRadius+0.3)) || roadCorridor(t, ri, ring(a1, sim.BulbRadius+0.3)) {
+		if roadCorridor(t, ri, ring(a0, R+0.3)) || roadCorridor(t, ri, ring(a1, R+0.3)) {
 			continue
 		}
-		h := kerbH
-		p0, p1 := At(ring(a0, sim.BulbRadius), h), At(ring(a1, sim.BulbRadius), h)
-		k0, k1 := At(ring(a0, sim.BulbRadius+0.25), h), At(ring(a1, sim.BulbRadius+0.25), h)
-		m.Quad(p0, k0, k1, p1, V3{0, 1, 0}, Kerb)
-		m.Quad(At(ring(a0, sim.BulbRadius), yRoad), At(ring(a1, sim.BulbRadius), yRoad), p1, p0, At(n.P, 0).Sub(p0), Kerb.Shade(0.85))
-		f0, f1 := sim.BulbRadius+(sim.FootpathInner-sim.RoadHalfWidth), sim.BulbRadius+(sim.FootpathOuter-sim.RoadHalfWidth)
+		kerbAndGutter(m, At(ring(a0, R), 0), At(ring(a1, R), 0), At(ring(a0, R-0.4), 0), At(ring(a1, R-0.4), 0),
+			At(ring(a0, R+0.3), 0), At(ring(a1, R+0.3), 0))
+		f0, f1 := R+(sim.FootpathInner-sim.RoadHalfWidth), R+(sim.FootpathOuter-sim.RoadHalfWidth)
 		if roadCorridor(t, ri, ring(a0, f1+3.5)) || roadCorridor(t, ri, ring(a1, f1+3.5)) {
 			continue
 		}
 		m.Quad(At(ring(a0, f0), yFootpath), At(ring(a0, f1), yFootpath), At(ring(a1, f1), yFootpath), At(ring(a1, f0), yFootpath), V3{0, 1, 0}, Footpath)
 	}
+	m.Mat = MatPlain
 }
 
 // roadCorridor reports whether p lies within the paved width of road ri
@@ -235,160 +338,60 @@ func roadCorridor(t *sim.Town, ri int, p sim.V2) bool {
 	return false
 }
 
-func buildHouse(h *sim.House, m *Mesh) {
-	f := sim.Dir(h.Heading)
-	fr := YawFrame(At(h.P, 0), f.X, f.Y)
-	rng := h.Seed
-	next := func() float64 {
-		rng = rng*6364136223846793005 + 1442695040888963407
-		return float64(rng>>11) / float64(1<<53)
-	}
-	wall := walls[h.Wall%len(walls)]
-	roof := roofs[h.Roof%len(roofs)]
-	door := doors[int(h.Seed>>8)%len(doors)]
-	w, d := h.W, h.D
-	storey := 2.7
-	top := storey * float64(h.Storeys)
+const poleHeight = 9.6
 
-	// Which side of the frontage the driveway is on (local X).
-	dv := h.Drive[1].Sub(h.P)
-	driveX := dv.Dot(f.Right())
-	gx := math.Copysign(1, driveX)
-
-	// Concrete driveway from the kerb to the house.
-	d0, d1 := h.Drive[0], h.Drive[1]
-	u := d1.Sub(d0).Norm()
-	hwD := 1.6
-	m.Quad(At(d0.Add(u.Left().Scale(hwD)), yDrive), At(d0.Add(u.Right().Scale(hwD)), yDrive),
-		At(d1.Add(u.Right().Scale(hwD)), yDrive), At(d1.Add(u.Left().Scale(hwD)), yDrive), V3{0, 1, 0}, Concrete)
-	// A path from the footpath to the front door.
-	doorX := -gx * w * 0.2
-	pw := 0.55
-	pathStart := -d0.Sub(h.P).Dot(f) + (sim.FootpathOuter - sim.RoadHalfWidth)
-	m.Quad(fr.At(doorX-pw, yFootpath+0.005, pathStart), fr.At(doorX+pw, yFootpath+0.005, pathStart),
-		fr.At(doorX+pw, yFootpath+0.005, -d/2), fr.At(doorX-pw, yFootpath+0.005, -d/2), V3{0, 1, 0}, Footpath.Shade(0.95))
-
-	// Main body, and garage on the driveway side.
-	m.Box(fr, -w/2, 0, -d/2, w/2, top, d/2, wall, FaceBottom)
-	if h.Garage {
-		gw := 3.4
-		x0, x1 := gx*w/2-gx*gw, gx*w/2
-		if x0 > x1 {
-			x0, x1 = x1, x0
-		}
-		// Recessed garage door.
-		m.Box(fr, x0+0.2, 0, -d/2-0.02, x1-0.2, 2.2, -d/2+0.1, Hex(0xe8e6e0).Shade(0.9), FaceBottom)
-		for y := 0.35; y < 2.2; y += 0.45 {
-			m.Box(fr, x0+0.2, y, -d/2-0.04, x1-0.2, y+0.04, -d/2, Hex(0xc8c6c0), FaceBottom)
-		}
-	}
-	// Front door with a little porch step.
-	m.Box(fr, doorX-0.5, 0, -d/2-0.03, doorX+0.5, 2.15, -d/2, door, FaceBottom)
-	m.Box(fr, doorX-0.1-0.5, 2.15, -d/2-0.04, doorX+0.6, 2.25, -d/2, Trim, FaceBottom)
-	m.Box(fr, doorX-0.9, 0, -d/2-0.9, doorX+0.9, 0.18, -d/2, Concrete.Shade(1.05), FaceBottom)
-	m.Cylinder(fr, doorX+0.42, -d/2-0.05, 0.05, 1.0, 1.08, 4, Hex(0xd4af37), false)
-
-	// Windows on every wall.
-	window := func(x, y, z float64, face int) {
-		ww, wh := 1.3, 1.15
-		switch face {
-		case 0: // front (-Z)
-			m.Box(fr, x-ww/2-0.08, y-0.08, z-0.05, x+ww/2+0.08, y+wh+0.08, z, Trim, FaceBottom)
-			m.Box(fr, x-ww/2, y, z-0.07, x+ww/2, y+wh, z-0.05, Glass, FaceBottom)
-		case 1: // back (+Z)
-			m.Box(fr, x-ww/2-0.08, y-0.08, z, x+ww/2+0.08, y+wh+0.08, z+0.05, Trim, FaceBottom)
-			m.Box(fr, x-ww/2, y, z+0.05, x+ww/2, y+wh, z+0.07, Glass, FaceBottom)
-		case 2: // sides (±X), z is the along-depth position, x the wall
-			s := math.Copysign(1, x)
-			m.Box(fr, x, y-0.08, z-ww/2-0.08, x+s*0.05, y+wh+0.08, z+ww/2+0.08, Trim, FaceBottom)
-			m.Box(fr, x+s*0.05, y, z-ww/2, x+s*0.07, y+wh, z+ww/2, Glass, FaceBottom)
-		}
-	}
-	for s := 0; s < h.Storeys; s++ {
-		y := 0.95 + float64(s)*storey
-		for _, x := range []float64{-w * 0.36, w * 0.36, -gx * w * 0.02} {
-			if h.Garage && s == 0 && x*gx > 0 {
-				continue
-			}
-			if s == 0 && math.Abs(x-doorX) < 1.3 {
-				continue
-			}
-			window(x, y, -d/2, 0)
-		}
-		window(-w*0.25, y, d/2, 1)
-		window(w*0.25, y, d/2, 1)
-		window(-w/2, y, 0, 2)
-		window(w/2, y, 0, 2)
-	}
-
-	// Roof: gable (ridge along the frontage) or hip.
-	oh := 0.45
-	rh := 1.6 + next()*1.2
-	x0, x1, z0, z1 := -w/2-oh, w/2+oh, -d/2-oh, d/2+oh
-	y0, y1 := top, top+rh
-	if next() < 0.5 {
-		fl, fr1 := fr.At(x0, y0, z0), fr.At(x1, y0, z0)
-		bl, br := fr.At(x0, y0, z1), fr.At(x1, y0, z1)
-		rl, rr := fr.At(x0, y1, 0), fr.At(x1, y1, 0)
-		m.Quad(fl, fr1, rr, rl, fr.Dir(0, 1, -1), roof)
-		m.Quad(bl, br, rr, rl, fr.Dir(0, 1, 1), roof.Shade(0.9))
-		m.Poly([]V3{fr.At(-w/2, y0, -d/2), fr.At(-w/2, y0, d/2), fr.At(-w/2, y1-rh*oh/(d/2+oh), 0)}, fr.Dir(-1, 0, 0), wall)
-		m.Poly([]V3{fr.At(w/2, y0, -d/2), fr.At(w/2, y0, d/2), fr.At(w/2, y1-rh*oh/(d/2+oh), 0)}, fr.Dir(1, 0, 0), wall)
-		m.Poly([]V3{fl, bl, rl}, fr.Dir(0, -1, 0), roof.Shade(0.6))
-		m.Poly([]V3{fr1, br, rr}, fr.Dir(0, -1, 0), roof.Shade(0.6))
-		// Soffits.
-		m.Quad(fl, fr1, br, bl, fr.Dir(0, -1, 0), roof.Shade(0.55))
-	} else {
-		inset := math.Min((z1-z0)/2, (x1-x0)/2) * 0.9
-		rl, rr := fr.At(x0+inset, y1, 0), fr.At(x1-inset, y1, 0)
-		fl, fr1 := fr.At(x0, y0, z0), fr.At(x1, y0, z0)
-		bl, br := fr.At(x0, y0, z1), fr.At(x1, y0, z1)
-		m.Quad(fl, fr1, rr, rl, fr.Dir(0, 1, -1), roof)
-		m.Quad(bl, br, rr, rl, fr.Dir(0, 1, 1), roof.Shade(0.9))
-		m.Poly([]V3{fl, bl, rl}, fr.Dir(-1, 1, 0), roof.Shade(0.95))
-		m.Poly([]V3{fr1, br, rr}, fr.Dir(1, 1, 0), roof.Shade(0.85))
-		m.Quad(fl, fr1, br, bl, fr.Dir(0, -1, 0), roof.Shade(0.55))
-	}
-	if h.Chimney {
-		cx := (next()*2 - 1) * w * 0.3
-		m.Box(fr, cx-0.35, top, d*0.1, cx+0.35, y1+0.6, d*0.1+0.7, Hex(0x9a5a44), FaceBottom)
-	}
-
-	// Shrubs either side of the door, and a letterbox by the driveway.
-	for _, s := range []float64{-1.3, 1.3} {
-		m.Blob(fr.At(doorX+s, 0.45, -d/2-0.7), 0.6, 0.5, 0.5, h.Seed+uint64(s*10+20), leaf[int(h.Seed>>20)%len(leaf)])
-	}
-	side := h.P.Sub(d1)
-	side = side.Sub(u.Scale(side.Dot(u))).Norm()
-	lb := d0.Add(u.Scale(sim.FootpathOuter - sim.RoadHalfWidth + 0.4)).Add(side.Scale(2.2))
-	lf := YawFrame(At(lb, 0), -u.X, -u.Y)
-	m.Box(lf, -0.05, 0, -0.05, 0.05, 0.9, 0.05, Hex(0x5a4632), FaceBottom)
-	m.Box(lf, -0.2, 0.9, -0.3, 0.2, 1.2, 0.2, door.Shade(1.1))
+// poleArm is where wire k (-1, 0, 1) attaches to pole p.
+func poleArm(t *sim.Town, p sim.Pole, k float64) V3 {
+	_, tg := t.Roads[p.Road].At(p.S)
+	return At(p.P.Add(tg.Left().Scale(k*0.95)), poleHeight-0.55)
 }
 
-func buildTree(tr sim.Tree, seed uint64, m *Mesh) {
-	c := At(tr.P, 0)
-	fr := Identity
-	fr.O = c
-	pick := func(p []RGBA) RGBA { return p[int(seed>>16)%len(p)] }
-	switch tr.Kind {
-	case 1: // gum tree: pale trunk, clumps of sparse grey-green foliage
-		m.Frustum(fr, 0, 0, 0.22, 0.12, 0, tr.Height*0.75, 5, Hex(0xcdc4b4), false)
-		for i := 0; i < 4; i++ {
-			a := float64(i)*1.9 + float64(seed%7)
-			r := tr.Radius * 0.55
-			off := v3(math.Cos(a)*r, tr.Height*(0.62+0.1*float64(i%2)), math.Sin(a)*r)
-			m.Blob(c.Add(off), tr.Radius*0.6, tr.Radius*0.45, tr.Radius*0.6, seed+uint64(i), pick(gum))
+func buildPoles(t *sim.Town, out Chunks) {
+	for i, p := range t.Poles {
+		m := out.at(p.P)
+		_, tg := t.Roads[p.Road].At(p.S)
+		n := tg.Left()
+		base := At(p.P, 0)
+		m.Mat = MatBark
+		m.Tube(base, At(p.P, poleHeight), 0.16, 0.12, 8, Timber, true)
+		arm0, arm1 := At(p.P.Add(n.Scale(-1.2)), poleHeight-0.7), At(p.P.Add(n.Scale(1.2)), poleHeight-0.7)
+		m.Beam(arm0, arm1, 0.12, Timber.Shade(0.85))
+		m.Mat = MatPlastic
+		for _, k := range []float64{-1, 0, 1} {
+			a := At(p.P.Add(n.Scale(k*0.95)), poleHeight-0.64)
+			m.Tube(a, a.Add(V3{0, 0.12, 0}), 0.05, 0.035, 6, Hex(0x5a6a74), true)
 		}
-	case 2: // conifer
-		m.Cylinder(fr, 0, 0, 0.18, 0, tr.Height*0.3, 5, Hex(0x5a4030), false)
-		col := pick(pine)
-		m.Frustum(fr, 0, 0, tr.Radius, 0, tr.Height*0.2, tr.Height*0.75, 7, col, true)
-		m.Frustum(fr, 0, 0, tr.Radius*0.7, 0, tr.Height*0.5, tr.Height*1.05, 7, col.Shade(1.1), true)
-	default: // round leafy tree
-		m.Frustum(fr, 0, 0, 0.22, 0.15, 0, tr.Height*0.6, 5, Hex(0x6b4e33), false)
-		col := pick(leaf)
-		m.Blob(c.Add(v3(0, tr.Height*0.68, 0)), tr.Radius, tr.Radius*0.8, tr.Radius, seed, col)
-		m.Blob(c.Add(v3(tr.Radius*0.4, tr.Height*0.85, tr.Radius*0.2)), tr.Radius*0.65, tr.Radius*0.55, tr.Radius*0.65, seed+1, col.Shade(1.08))
+		if p.Light {
+			// Street light reaching out over the road.
+			in := n.Scale(-p.Side)
+			m.Mat = MatMetal
+			root := At(p.P, 7.6)
+			tip := At(p.P.Add(in.Scale(2.4)), 8.0)
+			m.Tube(root, tip, 0.05, 0.04, 6, Hex(0x9aa0a6), false)
+			hf := YawFrame(tip, in.X, in.Y)
+			m.Box(hf, -0.16, -0.12, -0.35, 0.16, 0.05, 0.25, Hex(0x8d949b))
+			m.Mat = MatPlastic
+			m.Box(hf, -0.13, -0.15, -0.3, 0.13, -0.12, 0.2, Hex(0xe8ecd8))
+		}
+		// Sagging wires to the next pole on this street.
+		if i+1 < len(t.Poles) {
+			q := t.Poles[i+1]
+			if q.Road == p.Road && q.Side == p.Side && q.P.Dist(p.P) < 55 {
+				m.Mat = MatRubber
+				for _, k := range []float64{-1, 0, 1} {
+					a, b := poleArm(t, p, k), poleArm(t, q, k)
+					sag := 0.35 + 0.0004*float64(b.Sub(a).Dot(b.Sub(a)))
+					const segs = 10
+					prev := a
+					for s := 1; s <= segs; s++ {
+						f := float64(s) / segs
+						pt := a.Lerp(b, f).Add(V3{0, float32(-sag * 4 * f * (1 - f)), 0})
+						m.Beam(prev, pt, 0.022, Hex(0x1c1c1c))
+						prev = pt
+					}
+				}
+			}
+		}
+		m.Mat = MatPlain
 	}
 }

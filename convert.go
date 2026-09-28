@@ -13,11 +13,14 @@ import (
 	"graphics.gd/classdb/MeshInstance3D"
 	"graphics.gd/classdb/Node"
 	"graphics.gd/classdb/Node3D"
+	"graphics.gd/classdb/Shader"
+	"graphics.gd/classdb/ShaderMaterial"
 	"graphics.gd/classdb/StandardMaterial3D"
 	"graphics.gd/variant/Basis"
 	"graphics.gd/variant/Color"
 	"graphics.gd/variant/Float"
 	"graphics.gd/variant/Transform3D"
+	"graphics.gd/variant/Vector2"
 	"graphics.gd/variant/Vector3"
 
 	"github.com/jsok/garbage-truck-simulator/internal/meshgen"
@@ -41,15 +44,18 @@ func toArrayMesh(m *meshgen.Mesh) ArrayMesh.Instance {
 	verts := make([]Vector3.XYZ, len(m.P))
 	norms := make([]Vector3.XYZ, len(m.N))
 	cols := make([]Color.RGBA, len(m.C))
+	uvs := make([]Vector2.XY, len(m.P))
 	for i := range m.P {
 		verts[i] = Vector3.XYZ(m.P[i])
 		norms[i] = Vector3.XYZ(m.N[i])
 		cols[i] = Color.RGBA(m.C[i])
+		uvs[i] = Vector2.XY{X: Float.X(m.M[i]), Y: m.S[i]}
 	}
 	arrays := make([]any, Mesh.ArrayMax)
 	arrays[Mesh.ArrayVertex] = verts
 	arrays[Mesh.ArrayNormal] = norms
 	arrays[Mesh.ArrayColor] = cols
+	arrays[Mesh.ArrayTexUv] = uvs
 	am.AddSurfaceFromArrays(Mesh.PrimitiveTriangles, arrays)
 	return am
 }
@@ -60,10 +66,10 @@ func materials() {
 	if vertexColourMaterial != Material.Nil {
 		return
 	}
-	m := StandardMaterial3D.New()
-	m.AsBaseMaterial3D().SetVertexColorUseAsAlbedo(true)
-	m.AsBaseMaterial3D().SetRoughness(0.85)
-	m.AsBaseMaterial3D().SetVertexColorIsSrgb(true)
+	sh := Shader.New()
+	sh.SetCode(surfaceShader)
+	m := ShaderMaterial.New()
+	m.SetShader(sh)
 	vertexColourMaterial = Object.Leak(m.AsMaterial())
 
 	u := StandardMaterial3D.New()

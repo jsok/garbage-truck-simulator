@@ -45,10 +45,62 @@ func (c RGBA) Mix(o RGBA, t float32) RGBA {
 
 // Mesh is a triangle soup with per-vertex normals and colours. Triangles are
 // stored clockwise as seen from the front, which is Godot's convention.
+//
+// Each vertex also carries a surface material and a wind-sway weight, taken
+// from Mat and Sway at the time the vertex is added. The renderer's shader
+// uses them for procedural surface detail.
 type Mesh struct {
 	P []V3
 	N []V3
 	C []RGBA
+	M []Material
+	S []float32
+
+	Mat  Material
+	Sway float32
+}
+
+// Material selects how the shader details a surface.
+type Material uint8
+
+const (
+	MatPlain Material = iota
+	MatGrass
+	MatAsphalt
+	MatConcrete
+	MatBrick
+	MatWeatherboard
+	MatRender
+	MatRoofTile
+	MatRoofMetal
+	MatGlass
+	MatFoliage
+	MatBark
+	MatPaint // glossy vehicle paint
+	MatPlastic
+	MatRoadPaint
+	MatLight // emissive
+	MatRubber
+	MatMetal
+	MatSolar
+	MatDash // textured interior plastic
+	MatGrassBlade
+)
+
+// With sets the material for subsequently added geometry and returns a
+// function restoring the previous one: defer m.With(MatBrick)().
+func (m *Mesh) With(mat Material) func() {
+	prev := m.Mat
+	m.Mat = mat
+	return func() { m.Mat = prev }
+}
+
+func (m *Mesh) vert(p, n V3, c RGBA) {
+	m.P = append(m.P, p)
+	m.N = append(m.N, n)
+	m.C = append(m.C, c)
+	m.M = append(m.M, m.Mat)
+	m.S = append(m.S, m.Sway)
 }
 
 // Empty reports whether the mesh has no triangles.
@@ -58,9 +110,25 @@ func (m *Mesh) Empty() bool { return len(m.P) == 0 }
 // side it should be visible from.
 func (m *Mesh) Tri(a, b, c V3, col RGBA) {
 	n := b.Sub(a).Cross(c.Sub(a)).Norm()
-	m.P = append(m.P, a, c, b)
-	m.N = append(m.N, n, n, n)
-	m.C = append(m.C, col, col, col)
+	m.vert(a, n, col)
+	m.vert(c, n, col)
+	m.vert(b, n, col)
+}
+
+// triFacing adds a triangle visible from the side want points to, with a
+// shared normal n.
+func (m *Mesh) triFacing(a, b, c, want, n V3, col RGBA) {
+	if b.Sub(a).Cross(c.Sub(a)).Dot(want) < 0 {
+		b, c = c, b
+	}
+	m.TriN(a, b, c, n, n, n, col)
+}
+
+// TriN is Tri with explicit per-vertex normals, for smooth shading.
+func (m *Mesh) TriN(a, b, c, na, nb, nc V3, col RGBA) {
+	m.vert(a, na, col)
+	m.vert(c, nc, col)
+	m.vert(b, nb, col)
 }
 
 // Poly adds a convex planar polygon, oriented so that it faces towards out.
@@ -89,6 +157,8 @@ func (m *Mesh) Append(o *Mesh) {
 	m.P = append(m.P, o.P...)
 	m.N = append(m.N, o.N...)
 	m.C = append(m.C, o.C...)
+	m.M = append(m.M, o.M...)
+	m.S = append(m.S, o.S...)
 }
 
 // Frame is a local coordinate system: points are O + X*x + Y*y + Z*z.
@@ -227,22 +297,36 @@ func (m *Mesh) Wheel(f Frame, x, y, z, r, w float64, n int, tyre, hub RGBA) {
 	}
 }
 
-// Blob adds a lumpy low-poly ball, used for foliage. Jitter is derived from
-// seed so the same tree always looks the same.
+// smoothQuad adds quad a-b-c-d with per-corner normals, facing towards out.
+func (m *Mesh) smoothQuad(a, b, c, d, na, nb, nc, nd, out V3, col RGBA) {
+	if b.Sub(a).Cross(d.Sub(a)).Dot(out) < 0 {
+		b, d = d, b
+		nb, nd = nd, nb
+	}
+	m.TriN(a, b, c, na, nb, nc, col)
+	m.TriN(a, c, d, na, nc, nd, col)
+}
+
+// Blob adds a lumpy, smooth-shaded ball, used for foliage. Jitter is derived
+// from seed so the same tree always looks the same.
 func (m *Mesh) Blob(c V3, rx, ry, rz float64, seed uint64, col RGBA) {
-	const rings, segs = 4, 7
+	const rings, segs = 6, 10
 	pts := make([][]V3, rings+1)
+	nrm := make([][]V3, rings+1)
 	for i := 0; i <= rings; i++ {
 		phi := math.Pi * float64(i) / rings
 		pts[i] = make([]V3, segs)
+		nrm[i] = make([]V3, segs)
 		for j := range segs {
 			th := 2*math.Pi*float64(j)/segs + float64(i%2)*math.Pi/segs
 			k := 1.0
 			if i > 0 && i < rings {
 				seed = seed*6364136223846793005 + 1442695040888963407
-				k = 0.85 + 0.3*float64(seed>>40)/float64(1<<24)
+				k = 0.86 + 0.26*float64(seed>>40)/float64(1<<24)
 			}
-			pts[i][j] = c.Add(v3(rx*k*math.Sin(phi)*math.Cos(th), ry*k*math.Cos(phi), rz*k*math.Sin(phi)*math.Sin(th)))
+			d := v3(math.Sin(phi)*math.Cos(th), math.Cos(phi), math.Sin(phi)*math.Sin(th))
+			pts[i][j] = c.Add(v3(rx*k*float64(d.X), ry*k*float64(d.Y), rz*k*float64(d.Z)))
+			nrm[i][j] = v3(float64(d.X)/rx, float64(d.Y)/ry, float64(d.Z)/rz).Norm()
 		}
 	}
 	for i := range rings {
@@ -250,10 +334,89 @@ func (m *Mesh) Blob(c V3, rx, ry, rz float64, seed uint64, col RGBA) {
 			k := (j + 1) % segs
 			a, b, cc, d := pts[i][j], pts[i][k], pts[i+1][k], pts[i+1][j]
 			out := a.Add(b).Add(cc).Add(d).Scale(0.25).Sub(c)
-			shade := float32(1.0 - 0.08*float64(i))
-			m.Poly([]V3{a, b, d}, out, col.Shade(shade))
-			m.Poly([]V3{b, cc, d}, out, col.Shade(shade))
+			shade := float32(1.04 - 0.1*float64(i)/rings) // darker underneath
+			m.smoothQuad(a, b, cc, d, nrm[i][j], nrm[i][k], nrm[i+1][k], nrm[i+1][j], out, col.Shade(shade))
 		}
+	}
+}
+
+// Tube adds a smooth-shaded tapered cylinder from a (radius r0) to b (r1).
+func (m *Mesh) Tube(a, b V3, r0, r1 float64, n int, col RGBA, caps bool) {
+	axis := b.Sub(a).Norm()
+	ref := V3{0, 1, 0}
+	if math.Abs(float64(axis.Y)) > 0.9 {
+		ref = V3{1, 0, 0}
+	}
+	x := axis.Cross(ref).Norm()
+	z := axis.Cross(x).Norm()
+	ring := func(o V3, r float64) ([]V3, []V3) {
+		pts, ns := make([]V3, n), make([]V3, n)
+		for i := range n {
+			an := 2 * math.Pi * float64(i) / float64(n)
+			dir := x.Scale(float32(math.Cos(an))).Add(z.Scale(float32(math.Sin(an))))
+			pts[i] = o.Add(dir.Scale(float32(r)))
+			ns[i] = dir
+		}
+		return pts, ns
+	}
+	lo, ln := ring(a, r0)
+	hi, _ := ring(b, r1)
+	for i := range n {
+		j := (i + 1) % n
+		out := ln[i].Add(ln[j])
+		m.smoothQuad(lo[i], lo[j], hi[j], hi[i], ln[i], ln[j], ln[j], ln[i], out, col)
+	}
+	if caps {
+		m.Poly(lo, axis.Scale(-1), col)
+		m.Poly(hi, axis, col)
+	}
+}
+
+// Beam adds a square-section bar of width w from a to b.
+func (m *Mesh) Beam(a, b V3, w float64, col RGBA) {
+	axis := b.Sub(a)
+	l := float64(math.Sqrt(float64(axis.Dot(axis))))
+	if l == 0 {
+		return
+	}
+	y := axis.Scale(float32(1 / l))
+	ref := V3{0, 1, 0}
+	if math.Abs(float64(y.Y)) > 0.9 {
+		ref = V3{1, 0, 0}
+	}
+	x := y.Cross(ref).Norm()
+	z := x.Cross(y).Norm()
+	m.Box(Frame{O: a, X: x, Y: y, Z: z}, -w/2, 0, -w/2, w/2, l, w/2, col)
+}
+
+// RoundedPrism extrudes a rounded rectangle (half extents hx0,hz0 at y0
+// tapering to hx1,hz1 at y1, corner radius r) with smooth sides.
+func (m *Mesh) RoundedPrism(f Frame, hx0, hz0, hx1, hz1, r, y0, y1 float64, col RGBA, top, bottom bool) {
+	const per = 4
+	section := func(hx, hz, y float64) ([]V3, []V3) {
+		var pts, ns []V3
+		corners := [][3]float64{{hx - r, hz - r, 0}, {-(hx - r), hz - r, math.Pi / 2}, {-(hx - r), -(hz - r), math.Pi}, {hx - r, -(hz - r), 3 * math.Pi / 2}}
+		for _, c := range corners {
+			for i := 0; i <= per; i++ {
+				a := c[2] + float64(i)/per*math.Pi/2
+				pts = append(pts, f.At(c[0]+r*math.Cos(a), y, c[1]+r*math.Sin(a)))
+				ns = append(ns, f.Dir(math.Cos(a), 0, math.Sin(a)).Norm())
+			}
+		}
+		return pts, ns
+	}
+	lo, ln := section(hx0, hz0, y0)
+	hi, _ := section(hx1, hz1, y1)
+	n := len(lo)
+	for i := range n {
+		j := (i + 1) % n
+		m.smoothQuad(lo[i], lo[j], hi[j], hi[i], ln[i], ln[j], ln[j], ln[i], ln[i].Add(ln[j]), col)
+	}
+	if top {
+		m.Poly(hi, f.Dir(0, 1, 0), col)
+	}
+	if bottom {
+		m.Poly(lo, f.Dir(0, -1, 0), col)
 	}
 }
 

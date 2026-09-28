@@ -56,14 +56,30 @@ func newTruckView(parent Node.Instance, overlay Node.Instance) *TruckView {
 	addChild(r, tv.boom.AsNode())
 	tv.head = meshNode(meshgen.ArmHead(), layerTruck, true).AsNode3D()
 	addChild(r, tv.head.AsNode())
-	claw := toArrayMesh(meshgen.ArmClaw()).AsMesh()
-	for i := range tv.claws {
-		tv.claws[i] = meshInstance(claw, layerTruck, true).AsNode3D()
+	for i, side := range []float32{1, -1} {
+		tv.claws[i] = meshNode(meshgen.ArmClaw(side), layerTruck, true).AsNode3D()
 		addChild(tv.head.AsNode(), tv.claws[i].AsNode())
 	}
 
-	// Cab interior.
+	// Cab interior, and glass with a faint reflection of the sky.
 	addChild(r, meshNode(meshgen.Cab(), layerCab, false).AsNode())
+	glass := &meshgen.Mesh{}
+	ws := meshgen.Windscreen
+	glass.Quad(ws[0], ws[1], ws[2], ws[3], meshgen.V3{Y: -0.1, Z: 1}, meshgen.RGBA{R: 1, G: 1, B: 1, A: 1})
+	for _, x := range []float32{-sim.TruckHalfW + 0.03, sim.TruckHalfW - 0.03} {
+		glass.Quad(meshgen.V3{X: x, Y: 1.93, Z: -4.35}, meshgen.V3{X: x, Y: 1.93, Z: -2.6}, meshgen.V3{X: x, Y: 2.95, Z: -2.6}, meshgen.V3{X: x, Y: 2.95, Z: -4.35}, meshgen.V3{X: -x}, meshgen.RGBA{R: 1, G: 1, B: 1, A: 1})
+	}
+	gm := StandardMaterial3D.New()
+	gb := gm.AsBaseMaterial3D()
+	gb.SetTransparency(BaseMaterial3D.TransparencyAlpha)
+	gb.SetAlbedoColor(Color.RGBA{R: 0.8, G: 0.88, B: 0.95, A: 0.06})
+	gb.SetRoughness(0.03)
+	gb.SetMetallic(0.2)
+	gb.SetMetallicSpecular(0.9)
+	gb.SetCullMode(BaseMaterial3D.CullDisabled)
+	gn := meshNode(glass, layerCab, false)
+	gn.AsGeometryInstance3D().SetMaterialOverride(gm.AsMaterial())
+	addChild(r, gn.AsNode())
 	tv.wheel = meshNode(meshgen.SteeringWheel(), layerCab, false).AsNode3D()
 	addChild(r, tv.wheel.AsNode())
 

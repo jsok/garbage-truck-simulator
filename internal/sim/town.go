@@ -112,6 +112,16 @@ type Tree struct {
 	Street bool
 }
 
+// Pole is a timber power pole on the nature strip. Consecutive poles along
+// the same road (Road, in order of S) carry overhead wires between them.
+type Pole struct {
+	P     V2
+	Road  int
+	S     float64
+	Side  float64 // +1 left of the road's direction, -1 right
+	Light bool    // carries a street light over the road
+}
+
 // Obstacle blocks the truck: either a circle (Radius > 0) or an oriented box.
 type Obstacle struct {
 	P            V2
@@ -134,6 +144,7 @@ type Town struct {
 	Houses   []House
 	Bins     []Bin
 	Trees    []Tree
+	Poles    []Pole
 	Obs      []Obstacle
 
 	StartPos     V2
@@ -341,6 +352,7 @@ func tryGenerate(seed int64, attempt uint64) *Town {
 	}
 	t.indexRoads()
 	t.placeHouses(rng)
+	t.placePoles(rng)
 	t.placeTrees(rng)
 	if len(t.Bins) < 40 {
 		return nil
@@ -544,7 +556,17 @@ func (t *Town) RoadDist(p V2) float64 {
 // NearestRoad returns the distance to the nearest road, its index and the arc
 // length along it. Road index is -1 if nothing is within 40m.
 func (t *Town) NearestRoad(p V2) (dist float64, road int, s float64) {
-	const reach = 40.0
+	return t.nearestRoadWithin(p, 40)
+}
+
+// RoadDistWithin is RoadDist with a shorter search radius, for bulk queries.
+// Distances beyond reach are reported as reach.
+func (t *Town) RoadDistWithin(p V2, reach float64) float64 {
+	d, _, _ := t.nearestRoadWithin(p, reach)
+	return d
+}
+
+func (t *Town) nearestRoadWithin(p V2, reach float64) (dist float64, road int, s float64) {
 	dist, road = reach, -1
 	t.segGrid.around(p, reach, func(id int) {
 		sg := t.segs[id]
@@ -698,6 +720,38 @@ func (t *Town) insideHouse(p V2, margin float64) bool {
 	return false
 }
 
+// Tree kinds.
+const (
+	TreeLeafy = iota
+	TreeGum
+	TreeConifer
+	TreePalm
+)
+
+// placePoles runs a line of power poles down one side of every street.
+func (t *Town) placePoles(rng *rand.Rand) {
+	for ri := range t.Roads {
+		r := &t.Roads[ri]
+		side := 1.0
+		if rng.Float64() < 0.5 {
+			side = -1
+		}
+		lit := false
+		for s := 8 + rng.Float64()*6; s < r.Len()-6; {
+			p, tg := r.At(s)
+			q := p.Add(tg.Left().Scale(side * (RoadHalfWidth + 1.4)))
+			if t.OtherRoadDist(q, ri) < RoadHalfWidth+2 || t.nearJunction(q, junctionRadius-2) || !t.clearOfBinsAndDrives(q, 3.2) {
+				s += 3 // shuffle along until there is room
+				continue
+			}
+			lit = !lit
+			t.Poles = append(t.Poles, Pole{P: q, Road: ri, S: s, Side: side, Light: lit})
+			t.Obs = append(t.Obs, Obstacle{P: q, Radius: 0.2})
+			s += 34 + rng.Float64()*8
+		}
+	}
+}
+
 func (t *Town) placeTrees(rng *rand.Rand) {
 	add := func(tr Tree) {
 		t.Trees = append(t.Trees, tr)
@@ -706,6 +760,11 @@ func (t *Town) placeTrees(rng *rand.Rand) {
 	farFromTrees := func(p V2, r float64) bool {
 		for _, o := range t.Trees {
 			if o.P.Dist(p) < r {
+				return false
+			}
+		}
+		for _, o := range t.Poles {
+			if o.P.Dist(p) < 3.5 {
 				return false
 			}
 		}
@@ -731,7 +790,11 @@ func (t *Town) placeTrees(rng *rand.Rand) {
 		if t.RoadDist(p) < 9.5 || t.insideHouse(p, 2.5) || !farFromTrees(p, 5.5) || !t.clearOfBinsAndDrives(p, 5) {
 			continue
 		}
-		add(Tree{P: p, Height: 5 + rng.Float64()*6, Radius: 2 + rng.Float64()*2, Kind: rng.IntN(3)})
+		kind := rng.IntN(3)
+		if rng.Float64() < 0.07 {
+			kind = TreePalm
+		}
+		add(Tree{P: p, Height: 5 + rng.Float64()*6, Radius: 2 + rng.Float64()*2, Kind: kind})
 	}
 	// A bushland border hides the edge of the world.
 	per := []struct{ a, b V2 }{

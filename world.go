@@ -8,12 +8,18 @@ import (
 	"graphics.gd/classdb/Camera3D"
 	"graphics.gd/classdb/DirectionalLight3D"
 	"graphics.gd/classdb/Environment"
+	"graphics.gd/classdb/GeometryInstance3D"
 	"graphics.gd/classdb/Light3D"
 	"graphics.gd/classdb/Mesh"
+	"graphics.gd/classdb/MultiMesh"
+	"graphics.gd/classdb/MultiMeshInstance3D"
 	"graphics.gd/classdb/Node"
 	"graphics.gd/classdb/Node3D"
-	"graphics.gd/classdb/ProceduralSkyMaterial"
+	"graphics.gd/classdb/RenderingServer"
+	"graphics.gd/classdb/Shader"
+	"graphics.gd/classdb/ShaderMaterial"
 	"graphics.gd/classdb/Sky"
+	"graphics.gd/classdb/Viewport"
 	"graphics.gd/classdb/WorldEnvironment"
 	"graphics.gd/variant/Basis"
 	"graphics.gd/variant/Color"
@@ -25,48 +31,114 @@ import (
 	"github.com/jsok/garbage-truck-simulator/internal/sim"
 )
 
+// Quality selects how much rendering work the scene does.
+type Quality int
+
+const (
+	QualityLow Quality = iota
+	QualityHigh
+)
+
+func (q Quality) String() string {
+	if q == QualityLow {
+		return "LOW"
+	}
+	return "HIGH"
+}
+
+// Scene lighting that the quality setting can adjust later.
+type lighting struct {
+	env *Environment.Instance
+	sun DirectionalLight3D.Instance
+}
+
 // addEnvironment sets up a sunny suburban morning.
-func addEnvironment(parent Node.Instance) {
-	sky := ProceduralSkyMaterial.New()
-	sky.SetSkyTopColor(Color.RGBA{R: 0.22, G: 0.45, B: 0.85, A: 1})
-	sky.SetSkyHorizonColor(Color.RGBA{R: 0.72, G: 0.82, B: 0.92, A: 1})
-	sky.SetGroundHorizonColor(Color.RGBA{R: 0.55, G: 0.62, B: 0.5, A: 1})
-	sky.SetGroundBottomColor(Color.RGBA{R: 0.3, G: 0.38, B: 0.25, A: 1})
+func addEnvironment(parent Node.Instance) *lighting {
+	sh := Shader.New()
+	sh.SetCode(skyShader)
+	skyMat := ShaderMaterial.New()
+	skyMat.SetShader(sh)
 	s := Sky.New()
-	s.SetSkyMaterial(sky.AsMaterial())
+	s.SetSkyMaterial(skyMat.AsMaterial())
+	s.SetRadianceSize(Sky.RadianceSize256)
 
 	env := Environment.New()
 	env.SetBackgroundMode(Environment.BgSky)
 	env.SetSky(s)
 	env.SetAmbientLightSource(Environment.AmbientSourceSky)
-	env.SetAmbientLightEnergy(0.9)
-	env.SetTonemapMode(Environment.ToneMapperFilmic)
+	env.SetAmbientLightEnergy(0.38)
+	env.SetReflectedLightSource(Environment.ReflectionSourceSky)
+	env.SetTonemapMode(Environment.ToneMapperAgx)
+	env.SetTonemapExposure(1.05)
+	env.SetAdjustmentEnabled(true)
+	env.SetAdjustmentSaturation(1.08)
+	env.SetAdjustmentContrast(1.06)
 	env.SetFogEnabled(true)
-	env.SetFogMode(Environment.FogModeDepth)
-	env.SetFogLightColor(Color.RGBA{R: 0.72, G: 0.8, B: 0.9, A: 1})
-	env.SetFogDepthBegin(160)
-	env.SetFogDepthEnd(520)
-	env.SetFogDensity(0.6)
+	env.SetFogMode(Environment.FogModeExponential)
+	env.SetFogLightColor(Color.RGBA{R: 0.7, G: 0.78, B: 0.88, A: 1})
+	env.SetFogDensity(0.0008)
+	env.SetFogAerialPerspective(0.55)
+	env.SetFogSunScatter(0.25)
+	env.SetFogSkyAffect(0.25)
 	env.SetSsaoEnabled(true)
+	env.SetSsaoRadius(1.2)
+	env.SetSsaoIntensity(1.6)
+	env.SetGlowIntensity(0.45)
+	env.SetGlowBloom(0.03)
+	env.SetGlowHdrThreshold(1.1)
+	env.SetGlowBlendMode(Environment.GlowBlendModeSoftlight)
+	env.SetSsilRadius(3)
+	env.SetSsilIntensity(0.8)
 	we := WorldEnvironment.New()
 	we.SetEnvironment(env)
 	addChild(parent, we.AsNode())
 
 	sun := DirectionalLight3D.New()
-	sun.AsNode3D().SetRotationDegrees(Euler.Degrees{X: -52, Y: -35})
-	sun.AsLight3D().SetShadowEnabled(true)
-	sun.AsLight3D().SetLightEnergy(1.25)
-	sun.AsLight3D().SetLightColor(Color.RGBA{R: 1, G: 0.96, B: 0.88, A: 1})
-	sun.AsLight3D().SetShadowBlur(1.5)
-	Light3D.Advanced(sun.AsLight3D()).SetParam(Light3D.ParamShadowMaxDistance, 140)
+	sun.AsNode3D().SetRotationDegrees(Euler.Degrees{X: -42, Y: -35})
+	l := sun.AsLight3D()
+	l.SetShadowEnabled(true)
+	l.SetLightEnergy(1.9)
+	l.SetLightColor(Color.RGBA{R: 1, G: 0.94, B: 0.84, A: 1})
+	l.SetShadowBlur(1.0)
+	l.SetShadowNormalBias(1.2)
+	sun.SetDirectionalShadowBlendSplits(true)
+	Light3D.Advanced(l).SetParam(Light3D.ParamShadowMaxDistance, 180)
 	addChild(parent, sun.AsNode())
+	return &lighting{env: &env, sun: sun}
+}
+
+// apply switches the expensive effects on or off.
+func (lt *lighting) apply(q Quality, vp Viewport.Instance, fork Viewport.Instance) {
+	high := q == QualityHigh
+	lt.env.SetSsilEnabled(high)
+	lt.env.SetGlowEnabled(high)
+	angular := 0.0
+	msaa := Viewport.Msaa2x
+	if high {
+		angular = 0.6 // soft, contact-hardening shadows
+		msaa = Viewport.Msaa4x
+	}
+	Light3D.Advanced(lt.sun.AsLight3D()).SetParam(Light3D.ParamSize, angular)
+	vp.SetMsaa3d(msaa)
+	fork.SetMsaa3d(Viewport.Msaa2x)
+	size := 4096
+	if high {
+		size = 8192
+	}
+	RenderingServer.DirectionalShadowAtlasSetSize(size, true)
+	filter := RenderingServer.ShadowQualitySoftLow
+	if high {
+		filter = RenderingServer.ShadowQualitySoftHigh
+	}
+	RenderingServer.DirectionalSoftShadowFilterSetQuality(filter)
 }
 
 // WorldView renders a town: static scenery plus the live bins.
 type WorldView struct {
-	root Node3D.Instance
-	seed int64
-	bins []binView
+	root  Node3D.Instance
+	seed  int64
+	bins  []binView
+	grass []Node3D.Instance
 
 	bodies  map[sim.Colour]Mesh.Instance
 	lids    map[sim.Colour]Mesh.Instance
@@ -96,6 +168,8 @@ func newWorldView(parent Node.Instance, town *sim.Town) *WorldView {
 	for _, m := range tm.Scenery {
 		addChild(w.root.AsNode(), meshNode(m, layerWorld, true).AsNode())
 	}
+	addChild(w.root.AsNode(), meshNode(tm.Far, layerWorld, false).AsNode())
+	w.addGrass(town)
 	for _, c := range sim.Colours {
 		w.bodies[c] = Object.Leak(toArrayMesh(meshgen.BinBody(c)).AsMesh())
 		w.lids[c] = Object.Leak(toArrayMesh(meshgen.BinLid(c)).AsMesh())
@@ -103,6 +177,48 @@ func newWorldView(parent Node.Instance, town *sim.Town) *WorldView {
 	}
 	w.bindBins(town)
 	return w
+}
+
+// addGrass scatters instanced grass tufts, one MultiMesh per chunk so that
+// distant chunks are culled.
+func (w *WorldView) addGrass(town *sim.Town) {
+	tuft := toArrayMesh(meshgen.GrassTuft()).AsMesh()
+	for key, tufts := range meshgen.GrassTufts(town) {
+		cx := (float64(key[0]) + 0.5) * meshgen.GrassChunk
+		cz := (float64(key[1]) + 0.5) * meshgen.GrassChunk
+		buf := make([]float32, 0, 12*len(tufts))
+		for _, t := range tufts {
+			s, c := math.Sincos(float64(t.Yaw))
+			k := float64(t.Scale)
+			// Row-major 3x4: basis rows then origin.
+			buf = append(buf,
+				float32(c*k), 0, float32(s*k), float32(float64(t.X)-cx),
+				0, float32(k*(0.8+0.4*s*s)), 0, 0,
+				float32(-s*k), 0, float32(c*k), float32(float64(t.Z)-cz))
+		}
+		mm := MultiMesh.New()
+		mm.SetTransformFormat(MultiMesh.Transform3d)
+		mm.SetMesh(tuft)
+		mm.SetInstanceCount(len(tufts))
+		mm.SetBuffer(buf)
+		mi := MultiMeshInstance3D.New()
+		mi.SetMultimesh(mm)
+		gi := mi.AsGeometryInstance3D()
+		gi.SetMaterialOverride(vertexColourMaterial)
+		gi.SetCastShadow(GeometryInstance3D.ShadowCastingSettingOff)
+		gi.SetVisibilityRangeEnd(80)
+		mi.AsVisualInstance3D().SetLayers(layerWorld)
+		mi.AsNode3D().SetPosition(vec(cx, 0, cz))
+		addChild(w.root.AsNode(), mi.AsNode())
+		w.grass = append(w.grass, mi.AsNode3D())
+	}
+}
+
+// showGrass turns the grass on or off.
+func (w *WorldView) showGrass(on bool) {
+	for _, g := range w.grass {
+		g.SetVisible(on)
+	}
 }
 
 // bindBins (re)creates the bin nodes for a town's bins.
@@ -134,6 +250,9 @@ var heldBinBasis = Basis.XYZ{X: vec(0, 0, 1), Y: vec(0, 1, 0), Z: vec(-1, 0, 0)}
 
 func (w *WorldView) sync(s *sim.Session, truck Transform3D.BasisOrigin, clock float64) {
 	Object.Use(w.root)
+	for _, g := range w.grass {
+		Object.Use(g)
+	}
 	pose := s.Arm.Pose()
 	for i := range w.bins {
 		b := &s.Town.Bins[i]

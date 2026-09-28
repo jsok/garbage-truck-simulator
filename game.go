@@ -68,6 +68,8 @@ type Game struct {
 	lastTick  int
 	best      map[string]int
 	newRecord bool
+	light     *lighting
+	quality   Quality
 
 	// Command line options, mostly for development.
 	autoplay bool
@@ -131,6 +133,12 @@ func (g *Game) parseArgs() {
 			g.autoplay = true
 		case "scenario":
 			g.scenario, g.autoplay = v, true
+		case "quality":
+			if v == "low" {
+				g.quality = QualityLow
+			} else {
+				g.quality = QualityHigh
+			}
 		case "view":
 			g.view = v
 		case "synth-keys":
@@ -148,6 +156,36 @@ func (g *Game) loadScores() {
 	}
 }
 
+func settingsPath() string { return filepath.Join(OS.GetUserDataDir(), "settings.json") }
+
+type settings struct {
+	Quality string `json:"quality"`
+}
+
+func (g *Game) loadSettings() {
+	var st settings
+	if b, err := os.ReadFile(settingsPath()); err == nil {
+		_ = json.Unmarshal(b, &st)
+	}
+	if st.Quality == "LOW" {
+		g.quality = QualityLow
+	}
+}
+
+func (g *Game) saveSettings() {
+	if b, err := json.Marshal(settings{Quality: g.quality.String()}); err == nil {
+		_ = os.MkdirAll(filepath.Dir(settingsPath()), 0o755)
+		_ = os.WriteFile(settingsPath(), b, 0o644)
+	}
+}
+
+func (g *Game) applyQuality() {
+	g.light.apply(g.quality, Viewport.Get(g.AsNode()), g.truck.ForkVP.AsViewport())
+	if g.world != nil {
+		g.world.showGrass(g.quality == QualityHigh)
+	}
+}
+
 func (g *Game) saveScores() {
 	if b, err := json.Marshal(g.best); err == nil {
 		_ = os.MkdirAll(filepath.Dir(scoresPath()), 0o755)
@@ -156,10 +194,12 @@ func (g *Game) saveScores() {
 }
 
 func (g *Game) Ready() {
+	g.quality = QualityHigh
+	g.loadSettings()
 	g.parseArgs()
 	g.loadScores()
 	root := g.AsNode()
-	addEnvironment(root)
+	g.light = addEnvironment(root)
 	g.audio = newAudio(root)
 
 	g.overlay = new(ForkOverlay)
@@ -189,6 +229,7 @@ func (g *Game) Ready() {
 	g.minimap.AsControl().SetMouseFilter(Control.MouseFilterIgnore)
 	addChild(layer.AsNode(), g.minimap.AsNode())
 
+	g.applyQuality()
 	g.newSession()
 	g.toTitle()
 	if g.autoplay {
@@ -207,6 +248,7 @@ func (g *Game) newSession() {
 			g.world.free()
 		}
 		g.world = newWorldView(g.AsNode(), g.sess.Town)
+		g.world.showGrass(g.quality == QualityHigh)
 	}
 	g.popups = nil
 	g.lastTick = -1
@@ -265,6 +307,11 @@ func (g *Game) UnhandledInput(event InputEvent.Instance) {
 		case Input.KeyRight, Input.KeyD:
 			g.timeIdx = min(len(shiftLengths)-1, g.timeIdx+1)
 			g.audio.Play("select", 1, -6)
+		case Input.KeyG:
+			g.quality = 1 - g.quality
+			g.applyQuality()
+			g.saveSettings()
+			g.audio.Play("select", 1.2, -6)
 		case Input.KeyN:
 			g.seed = rand.Int64N(10000)
 			g.newSession()
@@ -360,6 +407,8 @@ func (g *Game) Process(delta Float.X) {
 	g.clock += dt
 	Object.Use(g.titleCam)
 	Object.Use(g.debugCam)
+	Object.Use(*g.light.env)
+	Object.Use(g.light.sun)
 	if g.synthKeys {
 		g.replayKeys()
 	}
