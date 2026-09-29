@@ -150,6 +150,14 @@ func newAudio(parent Node.Instance) *Audio {
 	one("bump", 0.4, func(t float64) float64 {
 		return 0.9*sine(48, t)*env(t, 0.002, 0.1) + 0.6*ng.next(0.5)*env(t, 0.001, 0.03)
 	})
+	one("crash", 0.8, func(t float64) float64 {
+		// A hollow plastic thump, a clatter, and a smaller bounce.
+		v := 0.8*sine(95*(1+0.7*math.Exp(-t*25)), t)*env(t, 0.002, 0.08) + 0.5*ng.next(0.45)*env(t, 0.001, 0.12)
+		if t > 0.2 {
+			v += 0.4*sine(80, t)*env(t-0.2, 0.002, 0.06) + 0.3*ng.next(0.5)*env(t-0.2, 0.001, 0.06)
+		}
+		return v
+	})
 	one("shove", 0.15, func(t float64) float64 { return 0.5 * sine(170, t) * env(t, 0.002, 0.04) })
 	one("tick", 0.05, func(t float64) float64 { return 0.35 * sine(2100, t) * env(t, 0.001, 0.01) })
 	one("count", 0.25, func(t float64) float64 { return 0.35 * buzz(523, t) * env(t, 0.005, 0.1) })

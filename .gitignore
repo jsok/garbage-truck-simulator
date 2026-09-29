@@ -1,3 +1,4 @@
 /releases/
 *.png
 !/docs/*.png
+/garbage-truck-simulator

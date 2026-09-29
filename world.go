@@ -140,16 +140,24 @@ type WorldView struct {
 	bins  []binView
 	grass []Node3D.Instance
 
-	bodies  map[sim.Colour]Mesh.Instance
-	lids    map[sim.Colour]Mesh.Instance
-	markers map[sim.Colour]Mesh.Instance
+	bodies   map[sim.Colour]Mesh.Instance
+	lids     map[sim.Colour]Mesh.Instance
+	markers  map[sim.Colour]Mesh.Instance
+	spills   map[sim.Colour]Mesh.Instance
+	overflow Mesh.Instance
 }
 
 type binView struct {
-	root, lid, marker Node3D.Instance
-	lidAngle          float64
-	grabFrom          Transform3D.BasisOrigin
-	wasHeld           bool
+	root, lid, marker  Node3D.Instance
+	overflow, spill    Node3D.Instance
+	lidAngle           float64
+	grabFrom, fallFrom Transform3D.BasisOrigin
+	wasHeld, wasFallen bool
+	fromHeld           bool    // fell out of the arm, rather than over on the ground
+	heading            float64 // last heading while standing
+	fall               float64 // 0..1 through the fall
+	spillAt            sim.V2
+	spillHeading       float64
 }
 
 func newWorldView(parent Node.Instance, town *sim.Town) *WorldView {
@@ -159,6 +167,7 @@ func newWorldView(parent Node.Instance, town *sim.Town) *WorldView {
 		bodies:  map[sim.Colour]Mesh.Instance{},
 		lids:    map[sim.Colour]Mesh.Instance{},
 		markers: map[sim.Colour]Mesh.Instance{},
+		spills:  map[sim.Colour]Mesh.Instance{},
 	}
 	addChild(parent, w.root.AsNode())
 	tm := meshgen.BuildTown(town)
@@ -174,7 +183,9 @@ func newWorldView(parent Node.Instance, town *sim.Town) *WorldView {
 		w.bodies[c] = Object.Leak(toArrayMesh(meshgen.BinBody(c)).AsMesh())
 		w.lids[c] = Object.Leak(toArrayMesh(meshgen.BinLid(c)).AsMesh())
 		w.markers[c] = Object.Leak(toArrayMesh(meshgen.Marker(meshgen.BinColours[c].Shade(1.15))).AsMesh())
+		w.spills[c] = Object.Leak(toArrayMesh(meshgen.Spill(c)).AsMesh())
 	}
+	w.overflow = Object.Leak(toArrayMesh(meshgen.BinOverflow()).AsMesh())
 	w.bindBins(town)
 	return w
 }
@@ -226,6 +237,7 @@ func (w *WorldView) bindBins(town *sim.Town) {
 	for _, b := range w.bins {
 		b.root.AsNode().QueueFree()
 		b.marker.AsNode().QueueFree()
+		b.spill.AsNode().QueueFree()
 	}
 	w.bins = w.bins[:0]
 	for _, b := range town.Bins {
@@ -235,6 +247,12 @@ func (w *WorldView) bindBins(town *sim.Town) {
 		addChild(bv.root.AsNode(), bv.lid.AsNode())
 		bv.lid.SetPosition(Vector3.XYZ(meshgen.BinLidHinge))
 		addChild(bv.lid.AsNode(), meshInstance(w.lids[b.Colour], layerWorld, true).AsNode())
+		bv.overflow = meshInstance(w.overflow, layerWorld, true).AsNode3D()
+		addChild(bv.root.AsNode(), bv.overflow.AsNode())
+		bv.spill = meshInstance(w.spills[b.Colour], layerWorld, false).AsNode3D()
+		bv.spill.SetVisible(false)
+		addChild(w.root.AsNode(), bv.spill.AsNode())
+		bv.heading = b.Heading
 		mk := meshInstance(w.markers[b.Colour], layerMarkers, false)
 		mk.AsGeometryInstance3D().SetMaterialOverride(unshadedVertexMaterial)
 		bv.marker = mk.AsNode3D()
@@ -248,7 +266,17 @@ func (w *WorldView) free() { w.root.AsNode().QueueFree() }
 // heldBinBasis orients a gripped bin: front towards the truck, rolled by tilt.
 var heldBinBasis = Basis.XYZ{X: vec(0, 0, 1), Y: vec(0, 1, 0), Z: vec(-1, 0, 0)}
 
-func (w *WorldView) sync(s *sim.Session, truck Transform3D.BasisOrigin, clock float64) {
+// binTumble places a bin standing at p facing h, tipped back by angle th
+// about its back edge. At th = π/2 it lies on its back.
+func binTumble(p sim.V2, h, th float64) Transform3D.BasisOrigin {
+	const r = 0.38 // base centre to the back of the wheels
+	yaw := yawBasis(h)
+	b := Basis.Mul(yaw, xBasis(th))
+	edge := Vector3.Add(vec(p.X, 0, p.Y), Vector3.MulX(yaw.Z, r))
+	return xform(b, Vector3.Sub(edge, Vector3.MulX(b.Z, r)))
+}
+
+func (w *WorldView) sync(s *sim.Session, truck Transform3D.BasisOrigin, clock, dt float64) {
 	Object.Use(w.root)
 	for _, g := range w.grass {
 		Object.Use(g)
@@ -271,17 +299,59 @@ func (w *WorldView) sync(s *sim.Session, truck Transform3D.BasisOrigin, clock fl
 			}
 			bv.root.SetTransform(held)
 			target = math.Min(2.1, math.Max(0, pose.Tilt-0.7)*1.6)
+		case b.Fallen:
+			if !bv.wasFallen {
+				bv.fall = 0
+				bv.fallFrom = bv.root.Transform()
+				bv.fromHeld = bv.wasHeld && float64(bv.fallFrom.Origin.Y) > 0.3 // dropped from the air
+			}
+			bv.fall = math.Min(1, bv.fall+dt/0.4)
+			u := bv.fall * bv.fall // gathering speed as it goes
+			if bv.fromHeld {
+				bv.root.SetTransform(Transform3D.Lerp(bv.fallFrom, binTumble(b.Pos, b.Heading, math.Pi/2), u))
+			} else {
+				h := bv.heading + sim.WrapAngle(b.Heading-bv.heading)*smoothstep(math.Min(1, bv.fall*2.5))
+				bv.root.SetTransform(binTumble(b.Pos, h, u*math.Pi/2))
+			}
+			if bv.fall < 1 {
+				// The rubbish stays where it lands, even if the bin is pushed on.
+				bv.spillAt = b.Pos.Add(b.FallDir().Scale(1.3))
+				bv.spillHeading = b.Heading + math.Pi
+			}
+			if bv.fall > 0.6 {
+				target = 1.2
+				if !b.Collected {
+					target = 1.5 // flung open by the rubbish
+				}
+			}
 		case b.Collected:
 			bv.root.SetTransform(kerb)
 			target = 0.28
 		default:
 			bv.root.SetTransform(kerb)
 		}
-		bv.wasHeld = b.Held
+		if b.Overflowing {
+			target = math.Max(target, meshgen.BinOverflowLid)
+		}
+		bv.wasHeld, bv.wasFallen = b.Held, b.Fallen
+		switch {
+		case b.Held:
+			bv.heading = s.Truck.Heading + math.Pi/2 // facing the truck
+		case !b.Fallen:
+			bv.heading = b.Heading
+		}
 		bv.lidAngle += (target - bv.lidAngle) * 0.25
 		bv.lid.SetBasis(xBasis(bv.lidAngle))
+		bv.overflow.SetVisible(b.Overflowing && (!b.Fallen || bv.fall < 0.6))
 
-		show := !b.Collected && !b.Held
+		spilt := b.Fallen && !b.Collected && bv.fall > 0.6
+		bv.spill.SetVisible(spilt)
+		if spilt {
+			k := smoothstep((bv.fall - 0.6) / 0.4)
+			bv.spill.SetTransform(xform(Basis.Scaled(yawBasis(bv.spillHeading), vec(k, 1, k)), vec(bv.spillAt.X, 0.01, bv.spillAt.Y)))
+		}
+
+		show := !b.Collected && !b.Held && !b.Fallen
 		bv.marker.SetVisible(show)
 		if show {
 			scale := 1.0
@@ -293,6 +363,11 @@ func (w *WorldView) sync(s *sim.Session, truck Transform3D.BasisOrigin, clock fl
 			bv.marker.SetTransform(xform(bs, vec(b.Pos.X, bob, b.Pos.Y)))
 		}
 	}
+}
+
+func smoothstep(x float64) float64 {
+	x = math.Max(0, math.Min(1, x))
+	return x * x * (3 - 2*x)
 }
 
 // titleCamera orbits the suburb for the menu screen.

@@ -278,6 +278,88 @@ func BinLid(c sim.Colour) *Mesh {
 // BinLidHinge is where the lid attaches to the body, in bin space.
 var BinLidHinge = V3{0, 0.95, 0.35}
 
+// BinOverflowLid is how far the rubbish in an overflowing bin props its lid.
+const BinOverflowLid = 0.6
+
+// BinOverflow is the rubbish heaped up out of an overflowing bin, in bin
+// space.
+func BinOverflow() *Mesh {
+	m := &Mesh{}
+	m.Mat = MatPlastic
+	m.Blob(v3(-0.1, 1.0, 0.04), 0.2, 0.12, 0.2, 1, Hex(0x222326))
+	m.Blob(v3(0.12, 1.02, -0.12), 0.17, 0.13, 0.17, 2, Hex(0x3b3d42))
+	m.Blob(v3(-0.06, 1.0, -0.33), 0.17, 0.13, 0.15, 3, Hex(0xe4e4de))
+	m.Blob(v3(0.17, 0.93, -0.38), 0.12, 0.11, 0.1, 4, Hex(0x5a7fb0))
+	m.Mat = MatPlain
+	m.Box(Identity.Sub(-0.2, 0.96, -0.3, 0.5), -0.02, 0, -0.18, 0.02, 0.26, 0.18, Hex(0xb58a57)) // flattened box
+	return m
+}
+
+// Spill is the mess from a bin that fell over while still full. It lies on
+// the ground, fanning out towards -Z from the bin's mouth at the origin.
+func Spill(c sim.Colour) *Mesh {
+	m := &Mesh{}
+	seed := uint64(c)*977 + 13
+	rnd := func() float64 {
+		seed = seed*6364136223846793005 + 1442695040888963407
+		return float64(seed>>40) / float64(1<<24)
+	}
+	at := func() (x, z float64) {
+		z = -0.1 - 1.5*rnd()
+		return (rnd()*2 - 1) * (0.25 - 0.45*z), z
+	}
+	switch c {
+	case sim.Red:
+		m.Mat = MatPlastic
+		for _, col := range []RGBA{Hex(0x222326), Hex(0x3b3d42), Hex(0xe4e4de), Hex(0x2a2c30)} {
+			x, z := at()
+			m.Blob(v3(x, 0.09, z), 0.2+0.06*rnd(), 0.1, 0.17, seed, col)
+		}
+	case sim.Yellow:
+		m.Mat = MatPlastic
+		for i := range 5 {
+			x, z := at()
+			a := rnd() * math.Pi
+			d := v3(math.Cos(a), 0, math.Sin(a))
+			col, r, l := Hex(0x9fd3c7), 0.04, 0.14 // bottle
+			if i%2 == 1 {
+				m.Mat = MatMetal
+				col, r, l = Hex(0xc8ccd2), 0.033, 0.06 // can
+			}
+			o := v3(x, r, z)
+			m.Tube(o.Sub(d.Scale(float32(l))), o.Add(d.Scale(float32(l))), r, r, 8, col, true)
+			m.Mat = MatPlastic
+		}
+		m.Mat = MatPlain
+		for range 3 {
+			x, z := at()
+			m.Box(Identity.Sub(x, 0, z, rnd()*3), -0.2, 0, -0.15, 0.2, 0.03, 0.15, Hex(0xb58a57)) // cardboard
+		}
+	case sim.Green:
+		m.Mat = MatFoliage
+		for i := range 5 {
+			x, z := at()
+			m.Blob(v3(x, -0.03, z), 0.2+0.06*rnd(), 0.13, 0.18, seed, Hex(0x5f8f35).Shade(0.8+0.1*float32(i%3)))
+		}
+		m.Mat = MatBark
+		for range 3 {
+			x, z := at()
+			a := rnd() * math.Pi
+			d := v3(math.Cos(a)*0.35, 0, math.Sin(a)*0.35)
+			o := v3(x, 0.03, z)
+			m.Tube(o.Sub(d), o.Add(d), 0.025, 0.012, 5, Hex(0x6b4a2f), true)
+		}
+	}
+	// Loose scraps of paper and packaging.
+	m.Mat = MatPlain
+	for i := range 10 {
+		x, z := at()
+		col := []RGBA{Hex(0xf2f2ec), Hex(0xd9c9a3), Hex(0xc0392b), Hex(0x3a78c2)}[i%4]
+		m.Box(Identity.Sub(x, 0, z, rnd()*3), -0.05, 0, -0.04, 0.05, 0.012, 0.04, col)
+	}
+	return m
+}
+
 // Marker is a floating diamond shown above uncollected bins.
 func Marker(col RGBA) *Mesh {
 	m := &Mesh{}

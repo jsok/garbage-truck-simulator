@@ -13,6 +13,8 @@ func TestGenerateIsDeterministic(t *testing.T) {
 }
 
 func TestTownsArePlayable(t *testing.T) {
+	var spots [SpotRoad + 1]int
+	overflowing := 0
 	for seed := int64(1); seed <= 25; seed++ {
 		town := Generate(seed)
 		deadEnds, curved := 0, 0
@@ -33,10 +35,23 @@ func TestTownsArePlayable(t *testing.T) {
 		if len(town.Bins) < 40 || len(town.Houses) < 60 {
 			t.Errorf("seed %d: sparse town: %d houses, %d bins", seed, len(town.Houses), len(town.Bins))
 		}
-		// Every bin must be reachable from the kerb and not sit on a road.
+		// Bins sit where their spot says, within the arm's reach of the road.
 		for i, bin := range town.Bins {
-			if d := town.RoadDist(bin.Home); d < RoadHalfWidth || d > BinKerbOffset+0.5 {
-				t.Errorf("seed %d: bin %d is %.2fm from the road", seed, i, d)
+			lo, hi := RoadHalfWidth, BinKerbOffset+0.5
+			switch bin.Spot {
+			case SpotGutter:
+				lo, hi = RoadHalfWidth-0.6, RoadHalfWidth
+			case SpotBack:
+				lo, hi = FootpathOuter-0.6, RoadHalfWidth+MaxBinLateral-TruckHalfW
+			case SpotRoad:
+				lo, hi = 0, RoadHalfWidth-TruckHalfW
+			}
+			spots[bin.Spot]++
+			if bin.Overflowing {
+				overflowing++
+			}
+			if d := town.RoadDist(bin.Home); d < lo || d > hi {
+				t.Errorf("seed %d: bin %d (spot %d) is %.2fm from the road", seed, i, bin.Spot, d)
 			}
 		}
 		// Houses must not sit on roads.
@@ -50,5 +65,14 @@ func TestTownsArePlayable(t *testing.T) {
 		}
 		t.Logf("seed %2d: %2d nodes (%d culs-de-sac), %2d roads (%d curved), %3d houses, %3d bins, %4d trees",
 			seed, len(town.Nodes), deadEnds, len(town.Roads), curved, len(town.Houses), len(town.Bins), len(town.Trees))
+	}
+	t.Logf("bins by spot %v, %d overflowing", spots, overflowing)
+	for spot, n := range spots {
+		if n < 20 {
+			t.Errorf("only %d bins in spot %d", n, spot)
+		}
+	}
+	if overflowing < 100 {
+		t.Errorf("only %d overflowing bins", overflowing)
 	}
 }

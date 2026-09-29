@@ -93,14 +93,40 @@ type House struct {
 	Seed    uint64
 }
 
+// Spot is where a resident left their bin.
+type Spot int
+
+const (
+	SpotKerb   Spot = iota // on the nature strip, as it should be
+	SpotGutter             // right on the edge of the road
+	SpotBack               // at the back of the footpath, a long reach away
+	SpotRoad               // wheeled or blown out into the street
+)
+
 // Bin is a wheelie bin put out on the kerb.
 type Bin struct {
-	Home      V2 // where the resident left it
-	Pos       V2 // where it is now (trucks can nudge bins)
-	Heading   float64
-	Colour    Colour
-	Collected bool
-	Held      bool // currently in the arm's grip
+	Home        V2 // where the resident left it
+	Pos         V2 // where it is now (trucks can nudge bins)
+	Vel         V2 // sliding after being knocked
+	Heading     float64
+	Colour      Colour
+	Spot        Spot
+	Overflowing bool // rubbish piled up under a propped-open lid
+	Collected   bool
+	Held        bool // currently in the arm's grip
+	Fallen      bool // lying on its back; a full bin that falls over is lost
+}
+
+// FallDir is the direction the top of a fallen bin points. A fallen bin
+// lies on its back, so it faces straight up with its front towards the sky.
+func (b *Bin) FallDir() V2 { return Dir(b.Heading + math.Pi) }
+
+// body is the circle a bin occupies; lying down, it reaches further.
+func (b *Bin) body() (V2, float64) {
+	if b.Fallen {
+		return b.Pos.Add(b.FallDir().Scale(0.5)), 0.45
+	}
+	return b.Pos, BinRadius
 }
 
 // Tree is decorative greenery; its trunk is an obstacle.
@@ -361,6 +387,7 @@ func tryGenerate(seed int64, attempt uint64) *Town {
 	if !t.chooseStart() {
 		return nil
 	}
+	t.scatterBins(rng)
 	return t
 }
 
@@ -693,6 +720,63 @@ func (t *Town) tryHouse(rng *rand.Rand, p, n, tg V2) {
 		Heading: n.Scale(-1).Angle() + (rng.Float64()*2-1)*0.25,
 		Colour:  Colours[rng.IntN(len(Colours))],
 	})
+}
+
+// scatterBins makes some bins awkward: overflowing, or left somewhere other
+// than the kerb.
+func (t *Town) scatterBins(rng *rand.Rand) {
+	for i := range t.Bins {
+		b := &t.Bins[i]
+		b.Overflowing = rng.Float64() < 0.2
+		spot, off := SpotKerb, 0.0
+		switch r := rng.Float64(); {
+		case r < 0.07:
+			spot, off = SpotRoad, -0.6+rng.Float64()*1.8
+		case r < 0.16:
+			spot, off = SpotGutter, 3.5+rng.Float64()*0.3
+		case r < 0.26:
+			spot, off = SpotBack, 6.9+rng.Float64()*0.7
+		default:
+			continue
+		}
+		_, road, at := t.NearestRoad(b.Home)
+		p, tg := t.Roads[road].At(at)
+		n := tg.Left()
+		if b.Home.Sub(p).Dot(n) < 0 {
+			n = n.Scale(-1)
+		}
+		q := p.Add(n.Scale(off))
+		if !t.binSpotOK(i, q, spot, off) {
+			continue
+		}
+		b.Home, b.Pos, b.Spot = q, q, spot
+		if spot == SpotRoad {
+			b.Heading = rng.Float64() * 2 * math.Pi
+		}
+	}
+}
+
+// binSpotOK reports whether bin i can be moved to q, off metres from its
+// road's centreline.
+func (t *Town) binSpotOK(i int, q V2, spot Spot, off float64) bool {
+	if q.Dist(t.StartPos) < 45 || t.nearJunction(q, junctionRadius) {
+		return false
+	}
+	if spot != SpotRoad && t.RoadDist(q) < off-0.2 {
+		return false // closer to some other road
+	}
+	for j, o := range t.Bins {
+		if j != i && o.Home.Dist(q) < 1.4 {
+			return false
+		}
+	}
+	clear := true
+	t.obsGrid.around(q, BinRadius+9, func(id int) {
+		if circlePush(q, BinRadius+0.3, &t.Obs[id]) != (V2{}) {
+			clear = false
+		}
+	})
+	return clear
 }
 
 func (t *Town) clearOfBinsAndDrives(p V2, r float64) bool {

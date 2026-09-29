@@ -52,6 +52,7 @@ func TestGeneratedMeshesAreWellFormed(t *testing.T) {
 	for name, m := range map[string]*Mesh{
 		"truck": TruckBody(), "cab": Cab(), "wheel": SteeringWheel(), "bezel": ScreenBezel(),
 		"bin": BinBody(sim.Red), "lid": BinLid(sim.Red), "marker": Marker(Hex(0xff0000)),
+		"overflow": BinOverflow(), "spill red": Spill(sim.Red), "spill yellow": Spill(sim.Yellow), "spill green": Spill(sim.Green),
 	} {
 		checkWinding(t, name, m)
 	}

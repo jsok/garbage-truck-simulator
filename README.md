@@ -68,6 +68,17 @@ G switches graphics quality between HIGH and LOW, Enter starts and Esc quits.
 - Bins come in three colours: red (rubbish), yellow (recycling) and green
   (garden). Floating markers show uncollected bins, and the minimap shows
   those nearby.
+- Not every resident is tidy. Some bins are **overflowing** (+50 points, but
+  they're heavier and more likely to slip out of the jaws), and some are left
+  somewhere awkward: in the gutter where you might clip them, at the back of
+  the footpath where you'll have to hug the kerb, or out in the middle of the
+  street.
+- **Bins fall over.** Drive into one at more than a crawl, or press Space
+  when the fork isn't lined up and the jaws clip it, and over it goes. A
+  full bin that falls over spills everywhere and is lost (-50, and your combo
+  is gone). Now and then a bin slips out of the jaws on the way up (-50), or
+  topples when it's put back down (-20, more likely if you weren't lined up
+  PERFECT). An empty bin you knock over also costs 20.
 
 Best scores are saved per shift length.
 
@@ -104,6 +115,8 @@ PNG frames to `/tmp/gts-capture`. It accepts these extra development options:
 
 - `--scenario=pickup`: the truck starts short of a bin, then creeps up and grabs it.
 - `--scenario=drive`: holds the throttle.
+- `--scenario=drop`: like `pickup`, at an overflowing bin that is sure to slip out of the jaws.
+- `--scenario=crash`: drives along the nature strip into a bin.
 - `--synth-keys`: replays a key sequence through Godot's input system (menu, driving, pickup, pause, new suburb).
 - `--view=chase|top|fork`: shows the scene from outside the cab, or shows the fork cam full screen.
 

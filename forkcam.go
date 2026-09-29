@@ -113,6 +113,9 @@ func (o *ForkOverlay) Draw() {
 		ci.DrawCircle(Vector2.New(22, 22), 8, rgba(1, 0.2, 0.2, 1))
 	}
 	text(ci, 38, 32, "FORK CAM", 26, rgba(1, 1, 1, 0.9), left, 0)
+	if t.Bin >= 0 && !busy && s.Town.Bins[t.Bin].Overflowing {
+		text(ci, 0, 32, fmt.Sprintf("OVERFLOWING +%d", sim.OverflowBonus), 26, amber, centre, W)
+	}
 	text(ci, 0, 32, fmt.Sprintf("%d km/h  ", int(math.Round(math.Abs(s.Truck.Speed)*3.6))), 26, rgba(1, 1, 1, 0.9), right, W)
 	size := 38
 	if textWidth(status, size) > W-20 {
@@ -126,6 +129,8 @@ func (o *ForkOverlay) Draw() {
 func (g *Game) forkStatus(t sim.Target) (string, Color.RGBA) {
 	s := g.sess
 	switch {
+	case g.forkNote != "" && g.clock < g.noteUntil:
+		return g.forkNote, hotPink
 	case s.Arm.Busy() && s.Arm.Bin < 0:
 		return "MISSED! LINE UP A BIN", hotPink
 	case s.Arm.Phase == sim.ArmTip:

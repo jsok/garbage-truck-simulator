@@ -38,6 +38,7 @@ const (
 	EvShove                      // nudged a bin with the truck
 	EvArmPhase                   // arm moved to a new phase
 	EvBonus                      // a new bonus colour
+	EvTipped                     // a bin fell over
 	EvTimeUp
 )
 
@@ -51,6 +52,9 @@ type Event struct {
 	Colour   Colour
 	Strength float64
 	Phase    ArmPhase
+	Overflow bool     // EvCollected: the bin was overflowing
+	Cause    TipCause // EvTipped: why it fell
+	Lost     bool     // EvTipped: it was still full, so it spilled
 }
 
 // Target is the bin the arm would go for right now.
@@ -77,13 +81,20 @@ type Session struct {
 	BestCombo int
 	Perfects  int
 	Misses    int
+	Spilled   int // full bins knocked over or dropped
+	Knocked   int // emptied bins left lying down
 	Bonus     Colour
 	Over      bool
+	Chances   Chances
 
 	lastCollect float64
 	nextBonus   float64
-	scored      bool // current arm cycle has been scored
-	perfect     bool // current arm cycle was lined up perfectly
+	scored      bool    // current arm cycle has been scored
+	perfect     bool    // current arm cycle was lined up perfectly
+	dropAt      float64 // lift progress at which the bin slips, 0 if it won't
+	clipBin     int     // bin a badly lined-up swing will knock, or -1
+	clipExt     float64
+	clipDir     V2
 	events      []Event
 	rng         *rand.Rand
 }
@@ -99,7 +110,9 @@ func NewSession(cfg Config) *Session {
 		Town:        town,
 		Truck:       Truck{Pos: town.StartPos, Heading: town.StartHeading},
 		Arm:         Arm{Bin: -1},
+		Chances:     DefaultChances,
 		lastCollect: math.Inf(-1),
+		clipBin:     -1,
 		rng:         rand.New(rand.NewPCG(uint64(cfg.Seed), 99)),
 	}
 	s.Bonus = Colours[s.rng.IntN(len(Colours))]
@@ -147,7 +160,7 @@ func (s *Session) Target() Target {
 	mount := s.Truck.Local(ArmAlong, 0)
 	for i := range s.Town.Bins {
 		b := &s.Town.Bins[i]
-		if b.Collected || b.Held {
+		if b.Collected || b.Held || b.Fallen {
 			continue
 		}
 		d := b.Pos.Sub(mount)
@@ -188,7 +201,9 @@ func (s *Session) Step(dt float64, in Input) {
 		s.tryPickup()
 	}
 
-	if impact, shoved := s.Truck.Step(dt, in.Controls, s.Town); impact > 0.5 {
+	impact := s.Truck.Step(dt, in.Controls, s.Town)
+	s.slideBins(dt)
+	if shoved := s.shoveBins(); impact > 0.5 {
 		s.emit(Event{Kind: EvBump, Strength: impact})
 	} else if shoved {
 		s.emit(Event{Kind: EvShove})
@@ -199,6 +214,8 @@ func (s *Session) Step(dt float64, in Input) {
 	} else if !s.Arm.Busy() {
 		s.Truck.Locked = false
 	}
+	s.checkClip()
+	s.checkDrop()
 
 	// The shift ends on the buzzer, but a bin already in the air still counts.
 	if s.Clock >= s.Cfg.TimeLimit && !(s.Arm.Holding() && !s.scored) {
@@ -226,6 +243,7 @@ func (s *Session) tryPickup() {
 			reach = t.Lateral - TruckHalfW - BinRadius
 		}
 		s.Arm.start(-1, reach, 0)
+		s.clipBin, s.clipExt, s.clipDir = s.clipped(s.Arm.reach)
 		s.Misses++
 		s.emit(Event{Kind: EvMiss, Bin: t.Bin})
 	}
@@ -243,6 +261,8 @@ func (s *Session) enterPhase(p ArmPhase) {
 	switch p {
 	case ArmGrip:
 		b.Held = true
+	case ArmLift:
+		s.liftLuck(b)
 	case ArmTip:
 		s.collect(s.Arm.Bin)
 	case ArmStow:
@@ -251,6 +271,7 @@ func (s *Session) enterPhase(p ArmPhase) {
 		pose := s.Arm.Pose()
 		b.Pos = s.Truck.Local(pose.Bin.Along, pose.Bin.Lat)
 		b.Heading = s.Truck.Heading + math.Pi/2 // facing the truck, as it was held
+		s.putDownLuck(s.Arm.Bin)
 	}
 }
 
@@ -270,6 +291,11 @@ func (s *Session) collect(bin int) {
 		pts += PerfectBonus
 		s.Perfects++
 	}
+	overflow := b.Overflowing
+	if overflow {
+		pts += OverflowBonus
+		b.Overflowing = false
+	}
 	if b.Colour == s.Bonus {
 		pts *= 2
 	}
@@ -277,11 +303,12 @@ func (s *Session) collect(bin int) {
 	points := int(math.Round(pts/10) * 10)
 	s.Score += points
 	s.Counts[b.Colour]++
-	s.emit(Event{Kind: EvCollected, Bin: bin, Points: points, Perfect: s.perfect, Combo: s.Combo, Colour: b.Colour})
+	s.emit(Event{Kind: EvCollected, Bin: bin, Points: points, Perfect: s.perfect, Combo: s.Combo, Colour: b.Colour, Overflow: overflow})
 }
 
-// PlaceAtBin parks the truck in the kerbside lane beside bin i, with the arm
-// short of the bin by alongErr metres. It is used by tests and demo scenes.
+// PlaceAtBin parks the truck along the road beside bin i, as far from it as
+// a kerbside bin is from the left lane, with the arm short of the bin by
+// alongErr metres. It is used by tests and demo scenes.
 func (s *Session) PlaceAtBin(i int, alongErr float64) {
 	b := s.Town.Bins[i].Pos
 	_, road, at := s.Town.NearestRoad(b)
@@ -289,7 +316,6 @@ func (s *Session) PlaceAtBin(i int, alongErr float64) {
 	if b.Sub(p).Dot(tg.Left()) < 0 {
 		tg = tg.Scale(-1)
 	}
-	lat := b.Sub(p).Dot(tg.Left()) - LaneOffset
 	s.Truck = Truck{Heading: tg.Angle()}
-	s.Truck.Pos = b.Sub(tg.Scale(ArmAlong + alongErr)).Sub(tg.Left().Scale(lat))
+	s.Truck.Pos = b.Sub(tg.Scale(ArmAlong + alongErr)).Sub(tg.Left().Scale(BinKerbOffset - LaneOffset))
 }

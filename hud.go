@@ -202,6 +202,9 @@ func (h *HUD) drawResults(W, H, ui float64) {
 	stats := fmt.Sprintf("%d bins   %d perfect   best combo %d   %d misses   %.1f km driven",
 		s.Collected(), s.Perfects, s.BestCombo, s.Misses, s.Truck.Odo/1000)
 	text(ci, 0, y, stats, fs(30), rgba(1, 1, 1, 0.85), centre, W)
+	if s.Spilled > 0 || s.Knocked > 0 {
+		text(ci, 0, y+44*ui, fmt.Sprintf("%d spilled   %d knocked over", s.Spilled, s.Knocked), fs(28), rgba(1, 0.5, 0.65, 0.9), centre, W)
+	}
 	text(ci, 0, y+100*ui, "ENTER  another shift      Esc  menu", fs(34), rgba(0.5, 1, 0.6, 1), centre, W)
 }
 
@@ -255,7 +258,7 @@ func (m *Minimap) Draw() {
 		}
 	}
 	for i, b := range s.Town.Bins {
-		if b.Collected || b.Held || !near(b.Pos, 200) {
+		if b.Collected || b.Held || b.Fallen || !near(b.Pos, 200) {
 			continue
 		}
 		r := 4.5

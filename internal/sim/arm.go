@@ -58,6 +58,8 @@ type Arm struct {
 	ext   float64 // extension at the start of the current phase
 	reach float64 // target extension
 	Along float64 // bin offset along the truck when grabbed, relative to ArmAlong
+	// Dropped is set when the bin slipped out of the jaws on the way up.
+	Dropped bool
 }
 
 // Busy reports whether a cycle is under way.
@@ -81,6 +83,14 @@ func smooth(x float64) float64 { return x * x * (3 - 2*x) }
 
 func (a *Arm) start(bin int, reach, along float64) {
 	*a = Arm{Phase: ArmReach, Bin: bin, ext: ArmStowed, reach: clamp(reach, ArmMinExt, ArmMaxExt), Along: along}
+}
+
+// drop lets go of the bin mid-lift and brings the empty arm back down from
+// the same height.
+func (a *Arm) drop() {
+	lifted := clamp(a.T/phaseTime[ArmLift], 0, 1)
+	a.Bin, a.Dropped = -1, true
+	a.Phase, a.T = ArmLower, phaseTime[ArmLower]*(1-lifted)
 }
 
 // step advances the arm, returning the phase it entered (or ArmIdle if the
@@ -172,6 +182,9 @@ func (a *Arm) Pose() ArmPose {
 	}
 	if a.Bin < 0 && a.Phase == ArmStow {
 		claw = 1 - u
+	}
+	if a.Dropped {
+		claw = 0
 	}
 	// The bin hangs from the jaws, which grip it on the truck-facing side.
 	up := L3{0, -math.Sin(tilt), math.Cos(tilt)}

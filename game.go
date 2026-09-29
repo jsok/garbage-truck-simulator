@@ -65,6 +65,8 @@ type Game struct {
 	countdown float64
 	pickup    bool // pickup pressed since the last step
 	wasLined  bool
+	forkNote  string  // a mishap shown on the fork screen...
+	noteUntil float64 // ...until this clock time
 	lastTick  int
 	best      map[string]int
 	newRecord bool
@@ -253,6 +255,7 @@ func (g *Game) newSession() {
 	g.popups = nil
 	g.lastTick = -1
 	g.wasLined = false
+	g.forkNote = ""
 	g.newRecord = false
 }
 
@@ -263,8 +266,19 @@ func (g *Game) toTitle() {
 
 func (g *Game) start() {
 	g.newSession()
-	if g.scenario == "pickup" {
+	switch g.scenario {
+	case "pickup":
 		g.sess.PlaceAtBin(0, 3)
+	case "drop":
+		g.sess.Chances = sim.Chances{Drop: 1, DropOverflowing: 1}
+		g.sess.PlaceAtBin(max(0, slices.IndexFunc(g.sess.Town.Bins, func(b sim.Bin) bool {
+			return b.Overflowing && b.Spot == sim.SpotKerb
+		})), 3)
+	case "crash":
+		// Head along the nature strip, straight at a bin.
+		tr := &g.sess.Truck
+		g.sess.PlaceAtBin(0, 14)
+		tr.Pos = tr.Pos.Add(tr.Forward().Left().Scale(sim.BinKerbOffset - sim.LaneOffset))
 	}
 	g.state = stateCountdown
 	g.countdown = 3
@@ -389,7 +403,7 @@ func (g *Game) controls() sim.Input {
 func (g *Game) autopilot(in *sim.Input) {
 	t := g.sess.Target()
 	switch g.scenario {
-	case "pickup":
+	case "pickup", "drop":
 		if !g.sess.Arm.Busy() && t.Bin >= 0 {
 			if t.Aligned && math.Abs(t.Along) < 0.25 && math.Abs(g.sess.Truck.Speed) < 1 {
 				in.Pickup = true
@@ -399,6 +413,8 @@ func (g *Game) autopilot(in *sim.Input) {
 		}
 	case "drive":
 		in.Throttle = 0.7
+	case "crash":
+		in.Throttle = 0.4
 	}
 }
 
@@ -454,7 +470,7 @@ func (g *Game) Process(delta Float.X) {
 	lean := playing && g.pressed(Input.KeyF, Input.KeyTab)
 	g.truck.sync(s, dt, lean)
 	truckXf := g.truck.Transform()
-	g.world.sync(s, truckXf, g.clock)
+	g.world.sync(s, truckXf, g.clock, dt)
 	throttle := 0.0
 	if playing && g.pressed(Input.KeyW, Input.KeyUp) {
 		throttle = 1
@@ -502,6 +518,9 @@ func (g *Game) handleEvents() {
 				msg += "  PERFECT!"
 				col = gold
 			}
+			if e.Overflow {
+				msg += "  OVERFLOWING!"
+			}
 			if e.Colour == s.Bonus {
 				msg += "  BONUS!"
 			}
@@ -525,6 +544,17 @@ func (g *Game) handleEvents() {
 			if e.Phase == sim.ArmReach || e.Phase == sim.ArmRelease {
 				g.audio.Play("thud", 1.6, -14)
 			}
+		case sim.EvTipped:
+			g.audio.Play("crash", 0.9+rand.Float64()*0.25, -3)
+			if e.Cause == sim.TipHit {
+				g.truck.bump(1)
+			}
+			msg, note := tipMessage(e)
+			if e.Points < 0 {
+				msg += fmt.Sprintf("  %d", e.Points)
+			}
+			g.say(msg, pink, 48)
+			g.forkNote, g.noteUntil = note, g.clock+1.6
 		case sim.EvBonus:
 			g.say(fmt.Sprintf("BONUS: %s BINS x2!", e.Colour), gold, 52)
 			g.audio.Play("combo", 0.8, -6)
@@ -537,6 +567,24 @@ func (g *Game) handleEvents() {
 		g.audio.Play("beep", 1, -8)
 	}
 	g.wasLined = lined
+}
+
+// tipMessage is the popup and the fork screen line for a bin falling over.
+func tipMessage(e sim.Event) (popup, fork string) {
+	switch {
+	case e.Cause == sim.TipDrop:
+		return "DROPPED IT! Rubbish everywhere", "DROPPED IT!"
+	case e.Cause == sim.TipPutDown:
+		return "Oops, it fell over", "IT FELL OVER!"
+	case e.Cause == sim.TipFork && e.Lost:
+		return "Clipped it with the fork! Spilled", "KNOCKED IT OVER!"
+	case e.Cause == sim.TipFork:
+		return "Knocked an empty bin over", "KNOCKED IT OVER!"
+	case e.Lost:
+		return "SPLAT! You ran over a bin", "BIN DOWN!"
+	default:
+		return "Knocked an empty bin over", "BIN DOWN!"
+	}
 }
 
 func (g *Game) finish() {

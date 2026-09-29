@@ -47,9 +47,9 @@ func (tr *Truck) Local(along, lateral float64) V2 {
 	return tr.Pos.Add(f.Scale(along)).Add(f.Left().Scale(lateral))
 }
 
-// Step advances the truck and resolves collisions. It returns the speed of
-// any impact (0 if none) and whether it shoved a bin.
-func (tr *Truck) Step(dt float64, c Controls, town *Town) (impact float64, shoved bool) {
+// Step advances the truck and resolves collisions with the scenery. It
+// returns the speed of any impact (0 if none).
+func (tr *Truck) Step(dt float64, c Controls, town *Town) float64 {
 	if tr.Locked {
 		tr.Speed = approach(tr.Speed, 0, 25*dt)
 	} else {
@@ -58,9 +58,7 @@ func (tr *Truck) Step(dt float64, c Controls, town *Town) (impact float64, shove
 	tr.Heading = WrapAngle(tr.Heading + tr.Speed/Wheelbase*math.Tan(tr.Steer)*dt)
 	tr.Pos = tr.Pos.Add(tr.Forward().Scale(tr.Speed * dt))
 	tr.Odo += math.Abs(tr.Speed * dt)
-	impact = tr.collide(town)
-	shoved = tr.shoveBins(town.Bins)
-	return impact, shoved
+	return tr.collide(town)
 }
 
 func (tr *Truck) drive(dt float64, c Controls) {
@@ -159,25 +157,4 @@ func circlePush(c V2, r float64, o *Obstacle) V2 {
 		return f.Scale(math.Copysign(px+r, lx))
 	}
 	return l.Scale(math.Copysign(py+r, ly))
-}
-
-func (tr *Truck) shoveBins(bins []Bin) bool {
-	shoved := false
-	f := tr.Forward()
-	for i := range bins {
-		b := &bins[i]
-		if b.Held {
-			continue
-		}
-		for _, off := range bodyCircles {
-			c := tr.Pos.Add(f.Scale(off))
-			d := b.Pos.Sub(c)
-			if dist, lim := d.Len(), bodyRadius+BinRadius; dist < lim && dist > 0 {
-				b.Pos = b.Pos.Add(d.Scale((lim - dist) / dist))
-				b.Heading += 0.3 * (lim - dist)
-				shoved = true
-			}
-		}
-	}
-	return shoved
 }
