@@ -50,6 +50,7 @@ type Game struct {
 
 	state     gameState
 	seed      int64
+	layout    *sim.Layout // real streets from --map, or nil
 	timeIdx   int
 	sess      *sim.Session
 	world     *WorldView
@@ -111,7 +112,13 @@ func (g *Game) replayKeys() {
 }
 
 func (g *Game) timeLimit() float64 { return float64(shiftLengths[g.timeIdx]) }
-func (g *Game) bestKey() string    { return strconv.Itoa(shiftLengths[g.timeIdx]) }
+func (g *Game) bestKey() string {
+	k := strconv.Itoa(shiftLengths[g.timeIdx])
+	if g.layout != nil {
+		k = g.layout.Name + "/" + k
+	}
+	return k
+}
 
 func (g *Game) parseArgs() {
 	g.seed = rand.Int64N(10000)
@@ -131,6 +138,12 @@ func (g *Game) parseArgs() {
 			if n, err := strconv.ParseInt(v, 10, 64); err == nil {
 				g.seed = n
 			}
+		case "map":
+			if l, err := loadLayout(v); err != nil {
+				fmt.Fprintf(os.Stderr, "bin day: %s: %v; using a generated suburb\n", v, err)
+			} else {
+				g.layout = l
+			}
 		case "play":
 			g.autoplay = true
 		case "scenario":
@@ -147,6 +160,25 @@ func (g *Game) parseArgs() {
 			g.synthKeys = true
 		}
 	}
+}
+
+// loadLayout reads a map made by cmd/mapmaker and checks it can hold a suburb.
+func loadLayout(path string) (*sim.Layout, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var l sim.Layout
+	if err := json.Unmarshal(b, &l); err != nil {
+		return nil, err
+	}
+	if l.Name == "" {
+		l.Name = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	}
+	if _, err := sim.FromLayout(&l, 1); err != nil {
+		return nil, err
+	}
+	return &l, nil
 }
 
 func scoresPath() string { return filepath.Join(OS.GetUserDataDir(), "scores.json") }
@@ -242,7 +274,7 @@ func (g *Game) Ready() {
 // newSession prepares a fresh shift, reusing the scenery when the suburb
 // has not changed.
 func (g *Game) newSession() {
-	g.sess = sim.NewSession(sim.Config{TimeLimit: g.timeLimit(), Seed: g.seed})
+	g.sess = sim.NewSession(sim.Config{TimeLimit: g.timeLimit(), Seed: g.seed, Layout: g.layout})
 	if g.world != nil && g.world.seed == g.seed {
 		g.world.bindBins(g.sess.Town)
 	} else {

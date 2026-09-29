@@ -1,6 +1,8 @@
 package sim
 
 import (
+	"errors"
+	"fmt"
 	"math"
 	"math/rand/v2"
 	"sort"
@@ -372,23 +374,40 @@ func tryGenerate(seed int64, attempt uint64) *Town {
 		return nil
 	}
 
+	t.nameRoads(rng)
+	if t.furnish(rng, 40) != nil {
+		return nil
+	}
+	return t
+}
+
+// nameRoads gives every unnamed road a made-up street name.
+func (t *Town) nameRoads(rng *rand.Rand) {
 	names := rng.Perm(len(streetNames))
 	for ri := range t.Roads {
-		t.Roads[ri].Name = streetNames[names[ri%len(names)]]
+		if t.Roads[ri].Name == "" {
+			t.Roads[ri].Name = streetNames[names[ri%len(names)]]
+		}
 	}
+}
+
+// furnish fills in everything that is not street layout: houses, bins, poles,
+// trees and the truck's starting point. It fails if the result has fewer than
+// minBins bins or nowhere to start.
+func (t *Town) furnish(rng *rand.Rand, minBins int) error {
 	t.indexRoads()
 	t.placeHouses(rng)
 	t.placePoles(rng)
 	t.placeTrees(rng)
-	if len(t.Bins) < 40 {
-		return nil
+	if len(t.Bins) < minBins {
+		return fmt.Errorf("sim: only room for %d bins, need %d", len(t.Bins), minBins)
 	}
 	t.indexObstacles()
 	if !t.chooseStart() {
-		return nil
+		return errors.New("sim: no street is long enough to start on")
 	}
 	t.scatterBins(rng)
-	return t
+	return nil
 }
 
 func (t *Town) addRoad(a, b int) {
@@ -868,8 +887,10 @@ func (t *Town) placeTrees(rng *rand.Rand) {
 			}
 		}
 	}
-	// Garden and park trees fill whatever space is left.
-	for range 3500 {
+	// Garden and park trees fill whatever space is left, sampled at the same
+	// density as in a procedural suburb (651m by 546m) however big the map is.
+	area := (t.Max.X - t.Min.X) * (t.Max.Y - t.Min.Y)
+	for range int(math.Max(3500, 3500*area/(651*546))) {
 		p := V2{t.Min.X + rng.Float64()*(t.Max.X-t.Min.X), t.Min.Y + rng.Float64()*(t.Max.Y-t.Min.Y)}
 		if t.RoadDist(p) < 9.5 || t.insideHouse(p, 2.5) || !farFromTrees(p, 5.5) || !t.clearOfBinsAndDrives(p, 5) {
 			continue
@@ -919,6 +940,15 @@ func (t *Town) chooseStart() bool {
 		c := t.Min.Lerp(t.Max, 0.5)
 		if best < 0 || r.Pts[len(r.Pts)/2].Dist(c) < t.Roads[best].Pts[len(t.Roads[best].Pts)/2].Dist(c) {
 			best = ri
+		}
+	}
+	if best < 0 {
+		// Real street maps may have no long through road: settle for the
+		// longest street. Bulbs are always at B, so the start stays clear.
+		for ri := range t.Roads {
+			if l := t.Roads[ri].Len(); l >= 40 && (best < 0 || l > t.Roads[best].Len()) {
+				best = ri
+			}
 		}
 	}
 	if best < 0 {

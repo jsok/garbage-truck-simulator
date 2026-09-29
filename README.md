@@ -35,9 +35,46 @@ Options go after `--` when launching Godot directly, for example
 | Option | Meaning |
 | --- | --- |
 | `--time=SECONDS` | shift length (also selectable on the title screen) |
-| `--seed=N` | which suburb to generate |
+| `--seed=N` | which suburb to generate (with `--map`, where the houses go) |
+| `--map=FILE` | play on real streets saved by the map maker |
 | `--play` | skip the title screen |
 | `--quality=high\|low` | graphics quality (also G on the title screen; remembered) |
+
+## Real streets
+
+The map maker builds a suburb on real streets from
+[OpenStreetMap](https://www.openstreetmap.org/): pick an area, and the game
+lays its houses, bins and trees out along those streets. It needs no account
+or API key.
+
+```sh
+go run ./cmd/mapmaker
+```
+
+then open <http://localhost:8765/>, search for a place, drag the box over the
+streets you want (150 m to 2 km across) and press **Preview** to see what the
+game will build. **Save** writes the map to `maps/` and shows the command to
+play it, for example:
+
+```sh
+~/gd/bin/Godot.app/Contents/MacOS/Godot --path graphics -- --map="$PWD/maps/malvern-east.json"
+```
+
+Only residential streets are used unless you tick **Include main roads**,
+which helps when neighbourhoods are only joined by a main road. Divided roads
+keep one carriageway, small roundabouts become plain junctions, and streets
+that cross the edge of the box end in a turning circle. Streets that don't
+join up with the rest are left out, since the truck can't reach them.
+
+Without the web page, give the area as south,west,north,east:
+
+```sh
+go run ./cmd/mapmaker -bbox=-37.883,145.055,-37.876,145.066 -name="Malvern East"
+```
+
+Map data © OpenStreetMap contributors, under the
+[Open Database Licence](https://www.openstreetmap.org/copyright). The game
+shows this credit on the title screen when playing an imported map.
 
 ## How to play
 
@@ -87,10 +124,12 @@ Best scores are saved per shift length.
 | Path | What |
 | --- | --- |
 | `internal/sim` | engine-independent game logic: suburb generator, truck physics, arm, scoring |
+| `internal/osm` | turns OpenStreetMap street data into a street layout for the suburb builder |
 | `internal/meshgen` | low-poly, vertex-coloured geometry for the town, truck and bins |
 | `*.go` (root) | the Godot presentation layer: scene setup, cameras, HUD, fork cam overlay, audio synthesis |
 | `shader.go` | the surface and sky shaders |
-| `cmd/townmap` | renders a suburb layout to PNG (`go run ./cmd/townmap -seed 42 -o town.png`) |
+| `cmd/townmap` | renders a suburb layout to PNG (`go run ./cmd/townmap -seed 42 -o town.png`, or `-map FILE` for a saved map) |
+| `cmd/mapmaker` | picks real streets to play on, in the browser or from the command line |
 | `cmd/sheet` | tiles captured frames into a contact sheet |
 | `scripts/capture.sh` | builds and records frames with Godot's movie writer |
 

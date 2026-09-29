@@ -18,6 +18,7 @@ const (
 type Config struct {
 	TimeLimit float64 // seconds
 	Seed      int64
+	Layout    *Layout // streets to build on; nil for a generated suburb
 }
 
 // Input is everything the player can do in one step.
@@ -99,12 +100,19 @@ type Session struct {
 	rng         *rand.Rand
 }
 
-// NewSession starts a shift in a freshly generated suburb.
+// NewSession starts a shift in a freshly built suburb. If the layout can't
+// hold one, it falls back to a generated suburb.
 func NewSession(cfg Config) *Session {
 	if cfg.TimeLimit <= 0 {
 		cfg.TimeLimit = 180
 	}
-	town := Generate(cfg.Seed)
+	var town *Town
+	if cfg.Layout != nil {
+		town, _ = FromLayout(cfg.Layout, cfg.Seed)
+	}
+	if town == nil {
+		town = Generate(cfg.Seed)
+	}
 	s := &Session{
 		Cfg:         cfg,
 		Town:        town,

@@ -159,7 +159,12 @@ func (h *HUD) drawTitle(W, H, ui float64) {
 	y := py + 60*ui
 	text(ci, px, y, fmt.Sprintf("<  Shift length: %s  >", clockText(g.timeLimit())), fs(40), rgba(1, 1, 1, 1), centre, pw)
 	y += 56 * ui
-	text(ci, px, y, fmt.Sprintf("Suburb #%d (N: new)     Graphics: %s (G)", g.seed, g.quality), fs(28), rgba(1, 1, 1, 0.8), centre, pw)
+	suburb := fmt.Sprintf("Suburb #%d (N: new)", g.seed)
+	if g.layout != nil {
+		suburb = fmt.Sprintf("%s #%d (N: new houses)", g.layout.Name, g.seed)
+		text(ci, 0, H-24*ui, g.layout.Attribution, fs(20), rgba(1, 1, 1, 0.75), centre, W)
+	}
+	text(ci, px, y, fmt.Sprintf("%s     Graphics: %s (G)", suburb, g.quality), fs(28), rgba(1, 1, 1, 0.8), centre, pw)
 	y += 44 * ui
 	if best := g.best[g.bestKey()]; best > 0 {
 		text(ci, px, y, fmt.Sprintf("Best for this shift length: %d", best), fs(26), rgba(1, 0.92, 0.4, 0.95), centre, pw)

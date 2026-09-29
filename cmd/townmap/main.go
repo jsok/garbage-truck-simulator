@@ -1,12 +1,14 @@
-// Command townmap renders a generated suburb to a PNG, for checking the
-// generator without launching the game.
+// Command townmap renders a generated suburb, or one built on a map maker
+// layout, to a PNG for checking without launching the game.
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"image"
 	"image/color"
 	"image/png"
+	"log"
 	"math"
 	"os"
 
@@ -17,9 +19,23 @@ func main() {
 	seed := flag.Int64("seed", 1, "town seed")
 	out := flag.String("o", "town.png", "output file")
 	scale := flag.Float64("scale", 2, "pixels per metre")
+	mapFile := flag.String("map", "", "street layout from the map maker, instead of a generated suburb")
 	flag.Parse()
 
 	t := sim.Generate(*seed)
+	if *mapFile != "" {
+		b, err := os.ReadFile(*mapFile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		var l sim.Layout
+		if err := json.Unmarshal(b, &l); err != nil {
+			log.Fatal(err)
+		}
+		if t, err = sim.FromLayout(&l, *seed); err != nil {
+			log.Fatal(err)
+		}
+	}
 	pad := 30.0
 	w := int((t.Max.X - t.Min.X + 2*pad) * *scale)
 	h := int((t.Max.Y - t.Min.Y + 2*pad) * *scale)

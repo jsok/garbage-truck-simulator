@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bin Day map maker</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font: 14px/1.4 system-ui, sans-serif; color: #222; }
+  body { display: flex; }
+  #panel { width: 330px; padding: 16px; overflow-y: auto; background: #f6f4ee; border-right: 1px solid #ccc; }
+  #map { flex: 1; }
+  h1 { margin: 0 0 4px; font-size: 22px; color: #c9861a; }
+  h2 { margin: 18px 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: #666; }
+  p { margin: 6px 0; }
+  .row { display: flex; gap: 6px; }
+  input[type=text] { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid #bbb; border-radius: 4px; font: inherit; }
+  button { padding: 6px 12px; border: 1px solid #999; border-radius: 4px; background: #fff; font: inherit; cursor: pointer; }
+  button:hover:not(:disabled) { background: #eee; }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: #2f6b3f; border-color: #2f6b3f; color: #fff; }
+  button.primary:hover:not(:disabled) { background: #245532; }
+  button.active { background: #ffe6a8; border-color: #c9861a; }
+  #size.bad { color: #b3261e; font-weight: 600; }
+  #status { min-height: 1.4em; }
+  #hint { padding: 6px 8px; background: #fff4d6; border: 1px solid #e6c36a; border-radius: 4px; }
+  .error { color: #b3261e; }
+  .stats { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; }
+  .stats b { text-align: right; }
+  code { display: block; margin-top: 6px; padding: 8px; background: #fff; border: 1px solid #ccc; border-radius: 4px; font-size: 12px; word-break: break-all; user-select: all; }
+  .legend span { display: inline-block; width: 10px; height: 10px; margin-right: 4px; border-radius: 2px; vertical-align: -1px; }
+  .handle { width: 14px !important; height: 14px !important; margin: -7px 0 0 -7px !important; background: #fff; border: 2px solid #c9861a; border-radius: 50%; }
+  .handle.move { border-radius: 3px; cursor: move; }
+  .leaflet-container.drawing { cursor: crosshair; }
+  small { color: #666; }
+</style>
+</head>
+<body>
+<div id="panel">
+  <h1>Bin Day map maker</h1>
+  <p>Pick a real neighbourhood to do your rounds in. The streets come from OpenStreetMap; the houses, bins and trees are random.</p>
+
+  <h2>1. Find a place</h2>
+  <form id="search" class="row">
+    <input type="text" id="query" placeholder="Suburb or address">
+    <button>Go</button>
+  </form>
+
+  <h2>2. Choose the area</h2>
+  <p>Drag the corners or centre of the orange box, or draw a new one.</p>
+  <div class="row">
+    <button id="draw">Draw area</button>
+    <button id="here">Box this view</button>
+  </div>
+  <p id="size"></p>
+
+  <h2>3. Preview</h2>
+  <p><label><input type="checkbox" id="mainRoads"> Include main roads</label><br>
+  <small>Neighbourhoods are sometimes only joined by a main road.</small></p>
+  <button id="preview" class="primary">Preview</button>
+  <p id="status"></p>
+  <p id="hint" hidden></p>
+  <div id="stats" class="stats"></div>
+  <p class="legend" id="legend" hidden>
+    <span style="background:#46484d"></span>street
+    <span style="background:#d07a52;margin-left:8px"></span>house
+    <span style="background:#e53935;margin-left:8px;border-radius:50%"></span>bin
+    <span style="background:#fff;border:1px solid #000;margin-left:8px;border-radius:50%"></span>start
+  </p>
+
+  <h2>4. Save</h2>
+  <div class="row">
+    <input type="text" id="name" placeholder="Map name">
+    <button id="save" class="primary" disabled>Save</button>
+  </div>
+  <div id="saved"></div>
+  <p><small>Only the streets are saved. Each game places houses and bins afresh; press N on the title screen for a different lot.</small></p>
+
+  <h2>Notes</h2>
+  <p><small>Lanes, car parks and private roads are left out, and so are main roads unless you ask for them. Divided roads keep one carriageway, and small roundabouts become plain junctions. Streets that cross the edge of the box end in a turning circle.</small></p>
+  <p><small>Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap contributors</a>. Streets via the <a href="https://overpass-api.de/" target="_blank">Overpass API</a>, search via <a href="https://nominatim.org/" target="_blank">Nominatim</a>.</small></p>
+</div>
+<div id="map"></div>
+
+<script>
+const MIN_SIDE = 150, MAX_SIDE = 2000;
+const $ = id => document.getElementById(id);
+
+const saved = JSON.parse(localStorage.getItem('binday-area') || 'null');
+const initial = saved ? L.latLngBounds(saved) : L.latLngBounds([-37.883, 145.055], [-37.876, 145.066]);
+
+const map = L.map('map', { boxZoom: false }).fitBounds(initial.pad(0.3));
+const tiles = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+}).addTo(map);
+
+// The selected area, with a handle at each corner and one in the middle.
+const box = L.rectangle(initial, { color: '#c9861a', weight: 2, fillOpacity: 0.06, interactive: false }).addTo(map);
+const icon = cls => L.divIcon({ className: 'handle ' + cls, iconSize: null });
+const corners = [0, 1, 2, 3].map(i => L.marker([0, 0], { draggable: true, icon: icon('corner') }).addTo(map));
+const mover = L.marker([0, 0], { draggable: true, icon: icon('move') }).addTo(map);
+
+function cornerPoints(b) {
+  return [b.getSouthWest(), b.getNorthWest(), b.getNorthEast(), b.getSouthEast()];
+}
+
+function setArea(b, keepPreview) {
+  box.setBounds(b);
+  cornerPoints(b).forEach((p, i) => corners[i].setLatLng(p));
+  mover.setLatLng(b.getCenter());
+  localStorage.setItem('binday-area', JSON.stringify([[b.getSouth(), b.getWest()], [b.getNorth(), b.getEast()]]));
+  showSize();
+  if (!keepPreview) clearPreview();
+}
+
+corners.forEach((m, i) => m.on('drag', () => {
+  const opposite = corners[(i + 2) % 4].getLatLng();
+  setArea(L.latLngBounds(m.getLatLng(), opposite));
+}));
+// Keep the handles on the box's corners once a drag is done, even if the
+// drag crossed over the opposite corner.
+corners.forEach(m => m.on('dragend', () => setArea(box.getBounds())));
+
+let moveFrom;
+mover.on('dragstart', () => { moveFrom = { at: mover.getLatLng(), b: box.getBounds() }; });
+mover.on('drag', () => {
+  const d = [mover.getLatLng().lat - moveFrom.at.lat, mover.getLatLng().lng - moveFrom.at.lng];
+  const sw = moveFrom.b.getSouthWest(), ne = moveFrom.b.getNorthEast();
+  setArea(L.latLngBounds([sw.lat + d[0], sw.lng + d[1]], [ne.lat + d[0], ne.lng + d[1]]));
+});
+
+function metres(b) {
+  const c = b.getCenter();
+  return [
+    map.distance([c.lat, b.getWest()], [c.lat, b.getEast()]),
+    map.distance([b.getSouth(), c.lng], [b.getNorth(), c.lng]),
+  ];
+}
+
+function showSize() {
+  const [w, h] = metres(box.getBounds());
+  const el = $('size');
+  let msg = `${Math.round(w)} × ${Math.round(h)} m`;
+  const bad = Math.min(w, h) < MIN_SIDE || Math.max(w, h) > MAX_SIDE;
+  if (Math.min(w, h) < MIN_SIDE) msg += ` — too small, make it at least ${MIN_SIDE} m across`;
+  if (Math.max(w, h) > MAX_SIDE) msg += ` — too big, keep it under ${MAX_SIDE} m across`;
+  if (!bad && w * h > 1.2e6) msg += ' — big: expect a slow start in game';
+  el.textContent = msg;
+  el.className = bad ? 'bad' : '';
+  $('preview').disabled = bad;
+}
+
+// Drawing a new box: press on the map and drag.
+let drawing = false, drawFrom = null;
+$('draw').onclick = () => {
+  drawing = !drawing;
+  $('draw').classList.toggle('active', drawing);
+  map.getContainer().classList.toggle('drawing', drawing);
+  drawing ? map.dragging.disable() : map.dragging.enable();
+};
+map.on('mousedown', e => { if (drawing) drawFrom = e.latlng; });
+map.on('mousemove', e => { if (drawFrom) setArea(L.latLngBounds(drawFrom, e.latlng)); });
+map.on('mouseup', () => {
+  if (!drawFrom) return;
+  drawFrom = null;
+  $('draw').click();
+});
+
+$('here').onclick = () => setArea(map.getBounds().pad(-0.15));
+
+$('search').onsubmit = async e => {
+  e.preventDefault();
+  const q = $('query').value.trim();
+  if (!q) return;
+  status('Searching…');
+  try {
+    const res = await fetch('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=' + encodeURIComponent(q));
+    const [hit] = await res.json();
+    if (!hit) return status(`Couldn't find “${q}”.`, true);
+    const c = L.latLng(+hit.lat, +hit.lon);
+    // A box about 700 × 550 m around the place, which fits a good round.
+    const b = c.toBounds(700);
+    const sw = b.getSouthWest(), ne = b.getNorthEast();
+    const dy = (ne.lat - sw.lat) * (550 / 700 - 1) / 2;
+    setArea(L.latLngBounds([sw.lat - dy, sw.lng], [ne.lat + dy, ne.lng]));
+    map.fitBounds(box.getBounds().pad(0.3));
+    if (!$('name').value) $('name').value = hit.name || q;
+    status('');
+  } catch (err) {
+    status('Search failed: ' + err.message, true);
+  }
+};
+
+// Preview of what the game will build.
+const overlay = L.layerGroup().addTo(map);
+let previewed = false;
+const binColours = { RED: '#e53935', YELLOW: '#fdd835', GREEN: '#43a047' };
+
+function status(msg, error) {
+  $('status').textContent = msg;
+  $('status').className = error ? 'error' : '';
+}
+
+function clearPreview() {
+  overlay.clearLayers();
+  tiles.setOpacity(1);
+  $('stats').innerHTML = '';
+  $('hint').hidden = true;
+  $('legend').hidden = true;
+  $('save').disabled = true;
+  previewed = false;
+}
+
+function request() {
+  return { bbox: bboxJSON(), mainRoads: $('mainRoads').checked };
+}
+
+function bboxJSON() {
+  const b = box.getBounds();
+  return { south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() };
+}
+
+async function post(url, body) {
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// Streets are 8 m kerb to kerb; draw them that wide at any zoom.
+function roadWeight() {
+  const lat = map.getCenter().lat * Math.PI / 180;
+  const metresPerPixel = 40075016.7 * Math.cos(lat) / Math.pow(2, map.getZoom() + 8);
+  return Math.max(2, 8 / metresPerPixel);
+}
+const roadLayers = [];
+map.on('zoomend', () => roadLayers.forEach(l => l.setStyle({ weight: roadWeight() })));
+
+async function preview() {
+  clearPreview();
+  $('preview').disabled = true;
+  status('Fetching streets from OpenStreetMap…');
+  let r;
+  try {
+    r = await post('/api/preview', request());
+  } catch (err) {
+    status(err.message, true);
+    showSize();
+    return;
+  }
+  showSize();
+  tiles.setOpacity(0.45);
+  roadLayers.length = 0;
+  for (const line of r.roads || []) {
+    roadLayers.push(L.polyline(line, { color: '#46484d', weight: roadWeight(), opacity: 0.9, lineCap: 'round', lineJoin: 'round' }).addTo(overlay));
+  }
+  for (const p of r.bulbs || []) L.circle(p, { radius: 10.5, stroke: false, fillColor: '#46484d', fillOpacity: 0.9 }).addTo(overlay);
+  for (const h of r.houses || []) L.polygon(h, { color: '#8a4a2e', weight: 1, fillColor: '#d07a52', fillOpacity: 0.9 }).addTo(overlay);
+  for (const b of r.bins || []) L.circleMarker(b.at, { radius: 3, color: '#222', weight: 1, fillColor: binColours[b.colour], fillOpacity: 1 }).addTo(overlay);
+  if (r.start) L.circleMarker(r.start, { radius: 7, color: '#000', weight: 2, fillColor: '#fff', fillOpacity: 1 }).bindTooltip('Truck starts here').addTo(overlay);
+  $('legend').hidden = false;
+
+  $('stats').innerHTML = [
+    ['Streets', `${(r.roads || []).length} (${r.km.toFixed(1)} km)`],
+    ['Houses', (r.houses || []).length],
+    ['Bins', (r.bins || []).length],
+  ].map(([k, v]) => `<span>${k}</span><b>${v}</b>`).join('');
+  if (r.hint) {
+    $('hint').textContent = r.hint;
+    $('hint').hidden = false;
+  }
+  if (r.error) return status(r.error, true);
+  status('');
+  previewed = true;
+  $('save').disabled = false;
+}
+
+$('preview').onclick = preview;
+$('mainRoads').onchange = () => { if ($('stats').innerHTML) preview(); };
+
+$('save').onclick = async () => {
+  $('save').disabled = true;
+  $('saved').innerHTML = '';
+  try {
+    const r = await post('/api/save', { ...request(), name: $('name').value });
+    if (r.error) throw new Error(r.error);
+    $('saved').innerHTML = '<p>Saved <b></b>. Play it with:</p><code></code>';
+    $('saved').querySelector('b').textContent = r.path;
+    $('saved').querySelector('code').textContent = r.command;
+  } catch (err) {
+    $('saved').innerHTML = '<p class="error"></p>';
+    $('saved').querySelector('p').textContent = 'Save failed: ' + err.message;
+  }
+  $('save').disabled = !previewed;
+};
+
+setArea(initial);
+</script>
+</body>
+</html>
