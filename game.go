@@ -73,6 +73,7 @@ type Game struct {
 	newRecord bool
 	light     *lighting
 	quality   Quality
+	cam       View // the player's choice of driving view
 
 	// Command line options, mostly for development.
 	autoplay bool
@@ -84,7 +85,8 @@ type Game struct {
 }
 
 // synthScript is a key sequence for checking the real input path: start a
-// shift from the title screen, drive forward, then swing the arm.
+// shift from the title screen, drive forward, then swing the arm while
+// cycling the views.
 var synthScript = []struct {
 	at      float64
 	key     Input.Key
@@ -93,7 +95,10 @@ var synthScript = []struct {
 	{0.5, Input.KeyEnter, true}, {0.6, Input.KeyEnter, false},
 	{4.0, Input.KeyW, true}, {6.0, Input.KeyW, false},
 	{6.2, Input.KeyD, true}, {6.8, Input.KeyD, false},
+	{7.0, Input.KeyR, true}, {7.1, Input.KeyR, false}, // round all three views
 	{7.5, Input.KeySpace, true}, {7.6, Input.KeySpace, false},
+	{7.9, Input.KeyR, true}, {8.0, Input.KeyR, false},
+	{8.6, Input.KeyR, true}, {8.7, Input.KeyR, false},
 	{9.0, Input.KeyEscape, true}, {9.1, Input.KeyEscape, false},
 	{9.5, Input.KeyQ, true}, {9.6, Input.KeyQ, false},
 	{10.5, Input.KeyN, true}, {10.6, Input.KeyN, false},
@@ -156,6 +161,14 @@ func (g *Game) parseArgs() {
 			}
 		case "view":
 			g.view = v
+			switch v {
+			case "cab":
+				g.cam = ViewCab
+			case "chase":
+				g.cam = ViewChase
+			case "kerb":
+				g.cam = ViewKerb
+			}
 		case "synth-keys":
 			g.synthKeys = true
 		}
@@ -194,6 +207,7 @@ func settingsPath() string { return filepath.Join(OS.GetUserDataDir(), "settings
 
 type settings struct {
 	Quality string `json:"quality"`
+	View    string `json:"view,omitempty"`
 }
 
 func (g *Game) loadSettings() {
@@ -204,10 +218,15 @@ func (g *Game) loadSettings() {
 	if st.Quality == "LOW" {
 		g.quality = QualityLow
 	}
+	for v := range numViews {
+		if st.View == v.String() {
+			g.cam = v
+		}
+	}
 }
 
 func (g *Game) saveSettings() {
-	if b, err := json.Marshal(settings{Quality: g.quality.String()}); err == nil {
+	if b, err := json.Marshal(settings{Quality: g.quality.String(), View: g.cam.String()}); err == nil {
 		_ = os.MkdirAll(filepath.Dir(settingsPath()), 0o755)
 		_ = os.WriteFile(settingsPath(), b, 0o644)
 	}
@@ -317,11 +336,20 @@ func (g *Game) start() {
 	if g.autoplay {
 		g.countdown = 0.01
 	}
-	g.truck.CabCam.MakeCurrent()
-	switch g.view {
-	case "chase", "top":
+	g.truck.Camera(g.cam).MakeCurrent()
+	if g.view == "top" {
 		g.debugCam.MakeCurrent()
 	}
+}
+
+// cycleView switches to the next driving view and remembers the choice.
+func (g *Game) cycleView() {
+	g.cam = (g.cam + 1) % numViews
+	if g.view != "top" {
+		g.truck.Camera(g.cam).MakeCurrent()
+	}
+	g.saveSettings()
+	g.audio.Play("select", 1.3, -8)
 }
 
 func (g *Game) say(msg string, col [4]float64, size int) {
@@ -371,6 +399,8 @@ func (g *Game) UnhandledInput(event InputEvent.Instance) {
 		switch k {
 		case Input.KeySpace, Input.KeyE:
 			g.pickup = true
+		case Input.KeyR:
+			g.cycleView()
 		case Input.KeyEscape, Input.KeyP:
 			if g.state == statePlaying {
 				g.state = statePaused
@@ -499,8 +529,8 @@ func (g *Game) Process(delta Float.X) {
 	}
 
 	playing := g.state == statePlaying || g.state == stateCountdown
-	lean := playing && g.pressed(Input.KeyF, Input.KeyTab)
-	g.truck.sync(s, dt, lean)
+	lean := playing && g.cam == ViewCab && g.pressed(Input.KeyF, Input.KeyTab)
+	g.truck.sync(s, dt, lean, g.cam)
 	truckXf := g.truck.Transform()
 	g.world.sync(s, truckXf, g.clock, dt)
 	throttle := 0.0
@@ -513,10 +543,6 @@ func (g *Game) Process(delta Float.X) {
 		titleCamera(g.titleCam, s.Town, g.clock)
 	}
 	switch g.view {
-	case "chase":
-		eye := Transform3D.Transform(vec(0, 7, 16), truckXf)
-		t := Transform3D.BasisOrigin{Basis: Basis.New(), Origin: eye}
-		g.debugCam.AsNode3D().SetGlobalTransform(Transform3D.LookingAt(t, truckXf.Origin, Vector3.Up))
 	case "top":
 		eye := Vector3.Add(truckXf.Origin, vec(0.01, 60, 0))
 		t := Transform3D.BasisOrigin{Basis: Basis.New(), Origin: eye}

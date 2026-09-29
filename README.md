@@ -85,6 +85,7 @@ shows this credit on the title screen when playing an imported map.
 | A D / ← → | steer |
 | Space (or E) | grab the bin |
 | F or Tab (hold) | lean in to look at the fork cam screen |
+| R | change view: cab, chase or kerb (remembered) |
 | H | horn |
 | Esc / P | pause (Q from the pause screen ends the shift) |
 
@@ -93,6 +94,10 @@ G switches graphics quality between HIGH and LOW, Enter starts and Esc quits.
 
 - Traffic keeps left, so bins are on your **left**. Drive in the left lane
   and the bins will be within the arm's reach.
+- Prefer to watch the fork from outside? R cycles between the driver's seat,
+  a **chase** view behind the truck's left flank, and a **kerb** view from
+  above the pickup zone. Outside the cab, the fork cam screen moves to the
+  bottom-left corner.
 - The fork cam shows the pickup zone on the kerb and tells you how far to go:
   `FORWARD 1.6 m >>`, `LINED UP!`, `PERFECT!`. "Ahead" is to the right of
   the screen, as if you were looking out of the left window.
@@ -157,6 +162,6 @@ PNG frames to `/tmp/gts-capture`. It accepts these extra development options:
 - `--scenario=drop`: like `pickup`, at an overflowing bin that is sure to slip out of the jaws.
 - `--scenario=crash`: drives along the nature strip into a bin.
 - `--synth-keys`: replays a key sequence through Godot's input system (menu, driving, pickup, pause, new suburb).
-- `--view=chase|top|fork`: shows the scene from outside the cab, or shows the fork cam full screen.
+- `--view=cab|chase|kerb|top|fork`: starts in one of the driving views (without saving it), shows the scene from high above, or shows the fork cam full screen.
 
 ![A generated suburb](docs/town-map.png)

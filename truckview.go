@@ -28,6 +28,18 @@ import (
 // Fork camera resolution; matches the aspect of the dashboard screen.
 const forkW, forkH = 736, 500
 
+// View is the camera the player drives with; R cycles through them.
+type View int
+
+const (
+	ViewCab   View = iota // from the driver's seat
+	ViewChase             // behind and to the left, along the arm side
+	ViewKerb              // high above the truck, looking down at the arm
+	numViews
+)
+
+func (v View) String() string { return [...]string{"CAB", "CHASE", "KERB"}[v] }
+
 // TruckView draws the truck, its arm and the driver's cab.
 type TruckView struct {
 	root   Node3D.Instance
@@ -37,13 +49,18 @@ type TruckView struct {
 	wheel  Node3D.Instance
 	speedo Label3D.Instance
 
-	CabCam  Camera3D.Instance
-	ForkCam Camera3D.Instance
-	ForkVP  SubViewport.Instance
+	CabCam   Camera3D.Instance
+	ChaseCam Camera3D.Instance // both third-person views
+	ForkCam  Camera3D.Instance
+	ForkVP   SubViewport.Instance
 
 	lean  float64 // 0 looking ahead .. 1 leaning in to read the screen
 	shake float64
 	clock float64
+
+	chaseEye  Vector3.XYZ // smoothed third-person camera position, world space
+	chaseLook Vector3.XYZ
+	chaseView View // the view chaseEye was last aimed for
 }
 
 func newTruckView(parent Node.Instance, overlay Node.Instance) *TruckView {
@@ -134,7 +151,55 @@ func newTruckView(parent Node.Instance, overlay Node.Instance) *TruckView {
 	tv.CabCam.SetNear(0.05)
 	tv.CabCam.SetFar(900)
 	addChild(r, tv.CabCam.AsNode())
+
+	// The third-person camera lives outside the truck so it can lag behind.
+	tv.ChaseCam = Camera3D.New()
+	tv.ChaseCam.SetCullMask(layerWorld | layerTruck | layerMarkers)
+	tv.ChaseCam.SetFov(62)
+	tv.ChaseCam.SetNear(0.1)
+	tv.ChaseCam.SetFar(900)
+	addChild(parent, tv.ChaseCam.AsNode())
 	return tv
+}
+
+// Camera is the camera for a view.
+func (tv *TruckView) Camera(v View) Camera3D.Instance {
+	if v == ViewCab {
+		return tv.CabCam
+	}
+	return tv.ChaseCam
+}
+
+// Third-person camera placements in truck-local space (+X right, -Z
+// forward). Both frame the arm on the left flank and the kerb beside it.
+var chaseRigs = map[View]struct{ eye, look Vector3.XYZ }{
+	// Behind the left rear corner, looking up the flank past the arm.
+	ViewChase: {vec(-4.2, 4.4, 10), vec(-2.6, 0.8, -sim.ArmAlong-2.5)},
+	// High over the kerb just behind the arm, looking down at the pickup
+	// zone.
+	ViewKerb: {vec(-4.0, 8.5, -sim.ArmAlong+6.5), vec(-2.4, 0.4, -sim.ArmAlong-1.2)},
+}
+
+// syncChase aims the third-person camera. It follows the truck with a little
+// lag, so turns swing the view round rather than jerking it.
+func (tv *TruckView) syncChase(v View, dt float64) {
+	rig, ok := chaseRigs[v]
+	if !ok {
+		tv.chaseView = v // snap into place next time
+		return
+	}
+	xf := tv.Transform()
+	eye := Transform3D.Transform(rig.eye, xf)
+	look := Transform3D.Transform(rig.look, xf)
+	if v != tv.chaseView {
+		tv.chaseEye, tv.chaseLook, tv.chaseView = eye, look, v
+	}
+	k := 1 - math.Exp(-dt*6)
+	tv.chaseEye = Vector3.Lerp(tv.chaseEye, eye, k)
+	tv.chaseLook = Vector3.Lerp(tv.chaseLook, look, math.Min(1, k*1.6))
+	shake := vec(0, tv.shake*0.12*math.Sin(tv.clock*47), 0)
+	t := Transform3D.BasisOrigin{Basis: Basis.New(), Origin: Vector3.Add(tv.chaseEye, shake)}
+	tv.ChaseCam.AsNode3D().SetGlobalTransform(Transform3D.LookingAt(t, tv.chaseLook, Vector3.Up))
 }
 
 // Transform is the truck's current world transform.
@@ -142,7 +207,7 @@ func (tv *TruckView) Transform() Transform3D.BasisOrigin { return tv.root.Transf
 
 func (tv *TruckView) bump(strength float64) { tv.shake = math.Min(1, tv.shake+strength*0.25) }
 
-func (tv *TruckView) sync(s *sim.Session, dt float64, lean bool) {
+func (tv *TruckView) sync(s *sim.Session, dt float64, lean bool, view View) {
 	tv.clock += dt
 	tr := &s.Truck
 	tv.root.SetTransform(groundXform(tr.Pos, tr.Heading, 0))
@@ -190,4 +255,6 @@ func (tv *TruckView) sync(s *sim.Session, dt float64, lean bool) {
 	camLook := vec(-3.1, 0.35, -sim.ArmAlong+0.15)
 	local := Transform3D.LookingAt(Transform3D.BasisOrigin{Basis: Basis.New(), Origin: camPos}, camLook, Vector3.Up)
 	tv.ForkCam.AsNode3D().SetGlobalTransform(Transform3D.Mul(tv.Transform(), local))
+
+	tv.syncChase(view, dt)
 }

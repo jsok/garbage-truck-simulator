@@ -115,10 +115,20 @@ func (h *HUD) Draw() {
 
 	// The key guide, early in the shift.
 	if s.Clock < 25 || g.state == stateCountdown {
-		lines := []string{"W/S or Up/Down  drive / brake / reverse", "A/D or Left/Right  steer", "SPACE  grab the bin", "F (hold)  lean in to the fork screen", "H  horn     Esc  pause"}
+		lines := []string{"W/S or Up/Down  drive / brake / reverse", "A/D or Left/Right  steer", "SPACE  grab the bin", "F (hold)  lean in to the fork screen", fmt.Sprintf("R  change view (%s)", g.cam), "H  horn     Esc  pause"}
 		for i, l := range lines {
 			text(ci, W-560*ui, (180+float64(i)*32)*ui, l, fs(22), rgba(1, 1, 1, 0.8), right, 540*ui)
 		}
+	}
+
+	// Outside the cab the dashboard screen is out of sight, so show the
+	// fork cam in the corner instead.
+	if g.cam != ViewCab && g.view != "fork" && (g.state == statePlaying || g.state == stateCountdown) {
+		pw := 520 * ui
+		ph := pw * forkH / forkW
+		px, py := 18*ui, H-ph-18*ui
+		panel(ci, px-6*ui, py-6*ui, pw+12*ui, ph+12*ui, rgba(0.08, 0.09, 0.1, 0.9))
+		ci.DrawTextureRect(g.truck.ForkVP.AsViewport().GetTexture().AsTexture2D(), Rect2.New(px, py, pw, ph), false)
 	}
 
 	// Popups rise and fade from the middle of the screen.
