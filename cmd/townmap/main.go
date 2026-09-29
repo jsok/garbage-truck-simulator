@@ -83,7 +83,7 @@ func main() {
 	for _, tr := range t.Trees {
 		disc(tr.P, tr.Radius*0.6, color.RGBA{40, 100, 40, 255})
 	}
-	cols := map[sim.Colour]color.RGBA{sim.Red: {230, 40, 40, 255}, sim.Yellow: {250, 220, 30, 255}, sim.Green: {60, 230, 60, 255}}
+	cols := map[sim.Colour]color.RGBA{sim.Red: {230, 40, 40, 255}, sim.Yellow: {250, 220, 30, 255}, sim.Green: {60, 230, 60, 255}, sim.Blue: {50, 120, 230, 255}}
 	for _, b := range t.Bins {
 		disc(b.Home, 1.1, cols[b.Colour])
 	}

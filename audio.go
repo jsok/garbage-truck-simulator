@@ -143,6 +143,14 @@ func newAudio(parent Node.Instance) *Audio {
 		n := ng.next(0.6) - ng.next(0.05)
 		return 0.7 * n * env(t, 0.12, 0.25)
 	})
+	one("blue", 0.6, func(t float64) float64 {
+		// A soft whump of paper and a cardboard slap.
+		v := 0.5*sine(110*(1+0.3*math.Exp(-t*15)), t)*env(t, 0.004, 0.1) + 0.35*ng.next(0.3)*env(t, 0.005, 0.12)
+		if t > 0.12 {
+			v += 0.3 * ng.next(0.5) * env(t-0.12, 0.002, 0.05)
+		}
+		return v
+	})
 	one("miss", 0.45, func(t float64) float64 {
 		f := 380 - 500*t
 		return 0.35 * math.Sin(2*math.Pi*f*t) * env(t, 0.01, 0.2)

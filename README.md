@@ -107,8 +107,8 @@ G switches graphics quality between HIGH and LOW, Enter starts and Esc quits.
   for the current **bonus colour** (it changes every 40 seconds), and a
   combo multiplier of up to x3 if you keep emptying bins within 20 seconds
   of each other.
-- Bins come in three colours: red (rubbish), yellow (recycling) and green
-  (garden). Floating markers show uncollected bins, and the minimap shows
+- Bins come in four colours: red (rubbish), yellow (recycling), green
+  (garden) and blue (paper and cardboard). Floating markers show uncollected bins, and the minimap shows
   those nearby.
 - Not every resident is tidy. Some bins are **overflowing** (+50 points, but
   they're heavier and more likely to slip out of the jaws), and some are left

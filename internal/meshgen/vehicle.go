@@ -37,11 +37,12 @@ var (
 	Windscreen   = [4]V3{{-1.14, 1.99, -4.47}, {1.14, 1.99, -4.47}, {1.12, 2.97, -4.55}, {-1.12, 2.97, -4.55}}
 )
 
-// BinColours are the colours of the three bin types.
+// BinColours are the colours of the bin types.
 var BinColours = map[sim.Colour]RGBA{
 	sim.Red:    Hex(0xd8342c),
 	sim.Yellow: Hex(0xf6c21c),
 	sim.Green:  Hex(0x78c043),
+	sim.Blue:   Hex(0x2f6fd0),
 }
 
 // Tyre adds a smooth tyre of radius r and width w with its axle along local
@@ -348,6 +349,17 @@ func Spill(c sim.Colour) *Mesh {
 			d := v3(math.Cos(a)*0.35, 0, math.Sin(a)*0.35)
 			o := v3(x, 0.03, z)
 			m.Tube(o.Sub(d), o.Add(d), 0.025, 0.012, 5, Hex(0x6b4a2f), true)
+		}
+	case sim.Blue:
+		m.Mat = MatPlain
+		for range 4 {
+			x, z := at()
+			m.Box(Identity.Sub(x, 0, z, rnd()*3), -0.22, 0, -0.17, 0.22, 0.04, 0.17, Hex(0xb58a57)) // flattened box
+		}
+		for i := range 3 {
+			x, z := at()
+			col := []RGBA{Hex(0xe8e6dc), Hex(0xd6d2c4), Hex(0xefe9d8)}[i]
+			m.Box(Identity.Sub(x, 0, z, rnd()*3), -0.2, 0, -0.14, 0.2, 0.025, 0.14, col) // newspaper
 		}
 	}
 	// Loose scraps of paper and packaging.

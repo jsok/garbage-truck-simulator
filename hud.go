@@ -92,9 +92,9 @@ func (h *HUD) Draw() {
 	text(ci, 36*ui, 50*ui, "SCORE", fs(22), rgba(1, 1, 1, 0.7), left, 0)
 	text(ci, 36*ui, 96*ui, fmt.Sprintf("%d", s.Score), fs(46), rgba(1, 0.92, 0.4, 1), left, 0)
 	for i, c := range sim.Colours {
-		x := (36 + float64(i)*90) * ui
+		x := (36 + float64(i)*68) * ui
 		panel(ci, x, 108*ui, 26*ui, 26*ui, binColour(c))
-		text(ci, x+34*ui, 131*ui, fmt.Sprintf("%d", s.Counts[c]), fs(26), rgba(1, 1, 1, 1), left, 0)
+		text(ci, x+32*ui, 131*ui, fmt.Sprintf("%d", s.Counts[c]), fs(26), rgba(1, 1, 1, 1), left, 0)
 	}
 
 	// Bonus colour and combo.
@@ -185,9 +185,9 @@ func (h *HUD) drawTitle(W, H, ui float64) {
 	text(ci, px, y, "screen by your steering wheel, then press SPACE.", fs(26), rgba(1, 1, 1, 0.85), centre, pw)
 	y += 50 * ui
 	for i, c := range sim.Colours {
-		x := px + pw/2 - 250*ui + float64(i)*180*ui
+		x := px + pw/2 - 320*ui + float64(i)*165*ui
 		panel(ci, x, y-24*ui, 28*ui, 28*ui, binColour(c))
-		text(ci, x+36*ui, y, []string{"Rubbish", "Recycling", "Garden"}[i], fs(24), rgba(1, 1, 1, 0.9), left, 0)
+		text(ci, x+36*ui, y, []string{"Rubbish", "Recycling", "Garden", "Paper"}[i], fs(24), rgba(1, 1, 1, 0.9), left, 0)
 	}
 	if int(g.clock*1.6)%2 == 0 {
 		text(ci, 0, py+ph+80*ui, "Press ENTER to start your shift", fs(44), rgba(0.5, 1, 0.6, 1), centre, W)
@@ -209,7 +209,7 @@ func (h *HUD) drawResults(W, H, ui float64) {
 	}
 	y += 130 * ui
 	for i, c := range sim.Colours {
-		x := W/2 - 270*ui + float64(i)*190*ui
+		x := W/2 - 365*ui + float64(i)*190*ui
 		panel(ci, x, y-34*ui, 40*ui, 40*ui, binColour(c))
 		text(ci, x+50*ui, y, fmt.Sprintf("x %d", s.Counts[c]), fs(38), rgba(1, 1, 1, 1), left, 0)
 	}

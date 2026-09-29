@@ -28,10 +28,11 @@ const (
 	Red    Colour = iota // general waste
 	Yellow               // recycling
 	Green                // garden organics
+	Blue                 // paper and cardboard
 )
 
 // Colours lists every bin colour in display order.
-var Colours = [...]Colour{Red, Yellow, Green}
+var Colours = [...]Colour{Red, Yellow, Green, Blue}
 
 func (c Colour) String() string {
 	switch c {
@@ -39,6 +40,8 @@ func (c Colour) String() string {
 		return "RED"
 	case Yellow:
 		return "YELLOW"
+	case Blue:
+		return "BLUE"
 	default:
 		return "GREEN"
 	}
